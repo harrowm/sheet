@@ -1,5 +1,8 @@
 # sheet
 
+[![tests](https://github.com/harrowm/sheet/actions/workflows/tests.yml/badge.svg)](https://github.com/harrowm/sheet/actions/workflows/tests.yml)
+![test count](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/harrowm/sheet/badges/tests.json)
+
 A simple spreadsheet utility. See [specv2.md](specv2.md).
 
 ## Development

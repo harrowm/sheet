@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write # only used to publish the test-count badge on pushes to main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install free-threaded Python 3.14t and dependencies
+        run: ./scripts/setup.sh
+
+      - name: Lint and type check
+        run: |
+          uv run ruff check sheet tests benchmarks scripts
+          uv run ruff format --check sheet tests benchmarks scripts
+          uv run mypy sheet
+
+      - name: Run tests
+        run: ./scripts/test.sh --junitxml=test-results.xml
+
+      - name: Summarise test results
+        if: always()
+        run: uv run python scripts/test_summary.py test-results.xml >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results.xml
+
+      # Publish the test count as a shields.io endpoint file on a "badges" branch (no secrets
+      # needed; the README badge reads it from raw.githubusercontent.com).
+      - name: Publish test-count badge
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          uv run python scripts/test_summary.py test-results.xml --badge > "$RUNNER_TEMP/tests.json" || true
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git fetch origin badges || true
+          if git rev-parse --verify --quiet origin/badges; then
+            git checkout -q -B badges origin/badges
+          else
+            git checkout -q --orphan badges
+            git rm -rfq .
+          fi
+          cp "$RUNNER_TEMP/tests.json" tests.json
+          git add tests.json
+          git commit -qm "Update test badge" || exit 0
+          git push origin badges
