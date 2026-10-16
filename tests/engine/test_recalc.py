@@ -242,11 +242,10 @@ def test_sheet_rolls_back_when_a_worker_fails(monkeypatch):
     s.set_entries([(r, 1, f"=A1+{r}") for r in range(1, 50)])
     before = {p: (x.text, x.value) for p, x in s.store.items()}
     real = sheet_module.evaluate
-    calls = []
+    calls = AtomicCounter()  # a plain list's len() can skip 20 when threads append together
 
     def flaky(node, reader):
-        calls.append(1)
-        if len(calls) == 20:
+        if calls.add(1) == 20:
             raise RuntimeError("boom")
         return real(node, reader)
 

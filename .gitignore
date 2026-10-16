@@ -6,3 +6,4 @@ __pycache__/
 .ruff_cache/
 .hypothesis/
 dist/
+.venv-ui/

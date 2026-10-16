@@ -35,3 +35,9 @@ strict = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["C408"]
+
+# PyQt6's type stubs mark many getters (menuBar(), selectionModel(), clipboard()) as possibly
+# None; checking each would only add noise, so that one error code is off for the UI.
+[[tool.mypy.overrides]]
+module = "sheet.ui.*"
+disable_error_code = ["union-attr"]

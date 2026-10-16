@@ -1,7 +1,9 @@
-"""Print a one-line summary and a shields.io endpoint JSON from a pytest JUnit XML file.
+"""Summarise pytest JUnit XML files, as a markdown line or a shields.io endpoint JSON.
 
-python scripts/test_summary.py test-results.xml            # markdown summary line
-python scripts/test_summary.py test-results.xml --badge    # shields.io endpoint JSON
+    python scripts/test_summary.py a.xml b.xml            # markdown summary line
+    python scripts/test_summary.py a.xml b.xml --badge    # shields.io endpoint JSON
+
+Totals are added over all the files (the engine and UI tests are separate runs).
 """
 
 from __future__ import annotations
@@ -11,12 +13,15 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-def read(path: str) -> dict[str, int]:
-    root = ET.parse(path).getroot()
-    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
-    total = sum(int(s.get("tests", 0)) for s in suites)
-    failed = sum(int(s.get("failures", 0)) + int(s.get("errors", 0)) for s in suites)
-    skipped = sum(int(s.get("skipped", 0)) for s in suites)
+def read(paths: list[str]) -> dict[str, int]:
+    """Totals over one or more JUnit XML files."""
+    total = failed = skipped = 0
+    for path in paths:
+        root = ET.parse(path).getroot()
+        suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+        total += sum(int(s.get("tests", 0)) for s in suites)
+        failed += sum(int(s.get("failures", 0)) + int(s.get("errors", 0)) for s in suites)
+        skipped += sum(int(s.get("skipped", 0)) for s in suites)
     return {
         "total": total,
         "failed": failed,
@@ -37,15 +42,17 @@ def badge(r: dict[str, int]) -> dict[str, object]:
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
+    files = [a for a in argv if not a.startswith("--")]
+    if not files:
         print(__doc__)
         return 2
-    r = read(argv[0])
+    r = read(files)
     if "--badge" in argv:
         print(json.dumps(badge(r)))
     else:
         print(
-            f"**{r['passed']} passed**, {r['failed']} failed, {r['skipped']} skipped ({r['total']} tests)"
+            f"**{r['passed']} passed**, {r['failed']} failed, {r['skipped']} skipped "
+            f"({r['total']} tests)"
         )
     return 1 if r["failed"] else 0
 
