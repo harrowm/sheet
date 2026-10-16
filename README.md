@@ -1,2 +1,3 @@
 # sheet
-A simple spreadsheet in Python
+
+A simple spreadsheet utility. See [specv2.md](specv2.md).

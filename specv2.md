@@ -168,3 +168,35 @@ Rules:
 - Structural edits and copy/paste: reference adjustment, `#REF!` generation, relative versus absolute.
 - CSV: round trips, quoting, formulas and dates on import.
 - UI (offscreen): model size and `data()` output, edit round trip, queued edit during recalculation.
+
+## 16. Design decisions and issues found during implementation
+
+A running log of decisions made and issues discovered while building. Newest entries go at the bottom.
+
+### Tooling and platform
+1. **PyQt6 has no wheel for free-threaded Python 3.14t.** `uv sync --extra ui` falls back to compiling PyQt6 from source, which hangs or fails. `scripts/setup.sh` installs the `ui` extra wheels-only (`--no-build`) and prints a warning when it is unavailable. The engine is unaffected, but the UI cannot run on 3.14t until a wheel exists. Options for step 7: run the UI on a standard 3.14 build with the engine on 3.14t, or wait for a wheel. Open decision.
+2. **The `ui` dependencies are an optional extra**, not a core dependency, so that setup, tests and CI succeed for the engine without Qt.
+3. **Layout:** the package is `sheet/` at the repo root and tests are in a top-level `tests/` directory (`tests/engine`, `tests/ui`), rather than nested under the package.
+
+### Lexer and parser
+4. **A reference-shaped word followed by `(` is a function name.** `LOG10(` matches the cell-reference pattern (`LOG10` is a valid column and row), so the lexer uses a negative lookahead and treats it as an identifier. Consequence: a function can never be named like a cell reference without parentheses ambiguity, and a reference directly followed by `(` is a syntax error.
+5. **Reference bounds are checked in the parser, not the lexer.** `XFE1` and `A1048577` lex as references but are rejected with a syntax error.
+6. **Unary minus binds tighter than `^`, as in Excel**: `=-2^2` is 4. `^` is right-associative (`=2^3^2` is 512), which differs from Excel (left-associative, giving 64). The spec and tests chose right-associative; this is a deliberate deviation from Excel and should be revisited if Excel fidelity matters.
+7. **Ranges are normalised** so that `start` is the top-left and `end` the bottom-right (`B2:A1` becomes `A1:B2`), with `$` flags following their coordinate.
+8. **Function names are upper-cased at parse time;** unknown names are only detected at evaluation (`#NAME?`), not at entry.
+9. **Syntax errors are positional:** `FormulaSyntaxError` carries the character position, offset by 1 for the leading `=`.
+10. **Numbers are always floats** in the AST (including integer literals) so there is a single numeric type through the engine.
+11. **Whole-column and whole-row ranges (`A:A`, `1:1`) are specified (section 6) but not yet implemented in the lexer and parser.** To be added with the range dependency work.
+
+### Evaluator and constant folding
+12. **Folding evaluates against an empty reader** (`NO_CELLS`). Any sub-tree with only literals, including function calls such as `SUM(1,2)` and unknown functions, is replaced by a `Literal`. A constant error is folded into an error literal, so `=1/0` is `Literal(#DIV/0!)` and is never re-evaluated.
+13. **Folding is purely structural.** Volatile functions (such as `NOW()` or `RAND()`) must not be folded if they are added later; the function registry will need a `volatile` flag.
+14. **Comparison ordering** follows Excel: numbers < text < booleans; text compares case-insensitively; an empty cell compares as 0, `""` or FALSE depending on the other operand.
+15. **Function argument rules are asymmetric.** A range or single-cell argument ignores empty, text and boolean cells (so `MAX(A1,10)` with text in `A1` ignores `A1`), whereas literal arguments are coerced strictly (`SUM("x")` is `#VALUE!`, `SUM(TRUE)` is 1).
+16. **`MAX`/`MIN` of no numbers return 0** and `AVERAGE` of none returns `#DIV/0!`, matching Excel.
+17. **Numbers convert to text with 15 significant digits** (`f"{x:.15g}"`), so `5.0` concatenates as `5`.
+18. **Arithmetic results that overflow or are not finite give `#NUM!`**; `0^-1` gives `#DIV/0!`; a negative base with a fractional exponent (a complex result) gives `#NUM!`.
+19. **`SUM` uses `math.fsum`** for accurate floating-point summation; results may differ in the last digit from a naive left-to-right sum, and from Excel.
+20. **A bare range outside a function** (`=A1:A3`) evaluates to `#VALUE!`. Excel's dynamic-array spilling is out of scope.
+21. **The evaluator reads cells through a `CellReader` protocol** (`get`, `range_values`) rather than a concrete store, so it can be tested with a fake and the real store plugs in later. `range_values` must return only populated cells, which is what makes huge ranges cheap.
+22. **Recursion depth:** parsing and evaluation are recursive, so extremely deeply nested formulas could hit Python's recursion limit. A maximum nesting depth (with a syntax error beyond it) should be added.
