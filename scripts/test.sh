@@ -19,6 +19,6 @@ if [ $mode != ui ]; then
   run uv run pytest tests --ignore=tests/ui "$@"
 fi
 if [ $mode != engine ]; then
-  UV_PROJECT_ENVIRONMENT=.venv-ui run uv run --python 3.14+gil --extra ui pytest tests/ui "$@"
+  UV_PROJECT_ENVIRONMENT=.venv-ui run uv run --python .venv-ui/bin/python --extra ui pytest tests/ui "$@"
 fi
 exit $status

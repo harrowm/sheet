@@ -11,7 +11,8 @@ command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/" 
 
 uv python install 3.14t
 uv sync --python 3.14t
-UV_PROJECT_ENVIRONMENT=.venv-ui uv sync --python 3.14+gil --extra ui
+UI_PYTHON=$(./scripts/ui_python.sh)
+UV_PROJECT_ENVIRONMENT=.venv-ui uv sync --python "$UI_PYTHON" --extra ui
 
 uv run python -c "import sys; print('engine:', sys.version.split()[0], 'free-threaded, GIL enabled:', sys._is_gil_enabled())"
 .venv-ui/bin/python -c "import sys; from PyQt6.QtCore import QT_VERSION_STR; print('ui:    ', sys.version.split()[0], 'standard build, Qt', QT_VERSION_STR)"

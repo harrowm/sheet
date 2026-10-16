@@ -9,6 +9,7 @@ Totals are added over all the files (the engine and UI tests are separate runs).
 from __future__ import annotations
 
 import json
+import os
 import sys
 import xml.etree.ElementTree as ET
 
@@ -17,6 +18,8 @@ def read(paths: list[str]) -> dict[str, int]:
     """Totals over one or more JUnit XML files."""
     total = failed = skipped = 0
     for path in paths:
+        if not os.path.exists(path):  # e.g. an unexpanded glob when no tests ran
+            continue
         root = ET.parse(path).getroot()
         suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
         total += sum(int(s.get("tests", 0)) for s in suites)

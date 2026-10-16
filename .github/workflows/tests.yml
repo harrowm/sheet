@@ -31,7 +31,7 @@ jobs:
           uv run ruff check sheet tests benchmarks scripts
           uv run ruff format --check sheet tests benchmarks scripts
           uv run mypy sheet --exclude 'sheet/ui'
-          UV_PROJECT_ENVIRONMENT=.venv-ui uv run --python 3.14+gil --extra ui mypy sheet/ui
+          UV_PROJECT_ENVIRONMENT=.venv-ui uv run --python .venv-ui/bin/python --extra ui mypy sheet/ui
 
       - name: Run engine tests (free-threaded Python)
         run: ./scripts/test.sh engine --junitxml=test-results-engine.xml
