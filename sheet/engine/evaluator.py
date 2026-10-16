@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Protocol
 
 from sheet.engine.ast import BinaryOp, CellRef, FuncCall, Literal, Node, RangeRef, UnaryOp
 from sheet.engine.values import ErrorKind, ErrorValue, Value
 
 
+class RangeSnapshotLike(Protocol):
+    @property
+    def numbers(self) -> Sequence[float]: ...
+
+    @property
+    def error(self) -> ErrorValue | None: ...
+
+
 class CellReader(Protocol):
     def get(self, row: int, col: int) -> Value: ...
+
+    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int) -> RangeSnapshotLike | None:
+        """Pre-packed numbers for a rectangle, if the reader has them (else None)."""
+        ...
 
     def range_values(self, r1: int, c1: int, r2: int, c2: int) -> Iterable[Value]:
         """Values of the *populated* cells in the inclusive rectangle."""
@@ -26,6 +38,9 @@ class _NoCells:
 
     def range_values(self, r1: int, c1: int, r2: int, c2: int) -> Iterable[Value]:
         return ()
+
+    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int) -> RangeSnapshotLike | None:
+        return None
 
 
 NO_CELLS: CellReader = _NoCells()
@@ -184,9 +199,14 @@ def _numbers(args: tuple[Node, ...], reader: CellReader) -> list[float] | ErrorV
     out: list[float] = []
     for arg in args:
         if isinstance(arg, RangeRef):
-            values: Iterable[Value] = reader.range_values(
-                arg.start.row, arg.start.col, arg.end.row, arg.end.col
-            )
+            rect = (arg.start.row, arg.start.col, arg.end.row, arg.end.col)
+            snap = reader.range_snapshot(*rect)
+            if snap is not None:
+                if snap.error is not None:
+                    return snap.error
+                out.extend(snap.numbers)
+                continue
+            values: Iterable[Value] = reader.range_values(*rect)
         elif isinstance(arg, CellRef):
             values = (reader.get(arg.row, arg.col),)
         else:
@@ -207,9 +227,12 @@ def _count(args: tuple[Node, ...], reader: CellReader) -> Value:
     total = 0
     for arg in args:
         if isinstance(arg, RangeRef):
-            values: Iterable[Value] = reader.range_values(
-                arg.start.row, arg.start.col, arg.end.row, arg.end.col
-            )
+            rect = (arg.start.row, arg.start.col, arg.end.row, arg.end.col)
+            snap = reader.range_snapshot(*rect)
+            if snap is not None:
+                total += len(snap.numbers)
+                continue
+            values: Iterable[Value] = reader.range_values(*rect)
         else:
             values = (evaluate(arg, reader),)
         total += sum(1 for v in values if isinstance(v, float))

@@ -64,6 +64,9 @@ def test_error_literals_evaluate_and_propagate():
         def range_values(self, *a):
             return ()
 
+        def range_snapshot(self, *a):
+            return None
+
     assert evaluate(compile_formula("=1+#REF!"), Empty()) == ErrorValue(ErrorKind.REF)
     assert compile_formula("=#NAME?") == Literal(ErrorValue(ErrorKind.NAME))
 

@@ -21,7 +21,9 @@ packages = ["sheet"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+pythonpath = ["."]
+addopts = "-ra -m 'not benchmark'"
+markers = ["benchmark: timing-sensitive checks, run with scripts/bench.sh"]
 
 [tool.ruff]
 line-length = 100

@@ -18,6 +18,9 @@ class FakeSheet:
     def get(self, row, col):
         return self.cells.get((row, col))
 
+    def range_snapshot(self, *rect):
+        return None
+
     def range_values(self, r1, c1, r2, c2):
         return [v for (r, c), v in self.cells.items() if r1 <= r <= r2 and c1 <= c <= c2]
 

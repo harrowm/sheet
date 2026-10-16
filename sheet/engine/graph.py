@@ -85,6 +85,10 @@ class DependencyGraph:
     def dependencies(self, cell: Cell) -> tuple[set[Cell], set[Rect]]:
         return set(self._cell_deps.get(cell, ())), set(self._range_deps.get(cell, ()))
 
+    def range_dependencies(self, cell: Cell) -> frozenset[Rect]:
+        """The ranges ``cell`` reads (no copy)."""
+        return self._range_deps.get(cell, frozenset())
+
     def dependents(self, cell: Cell) -> set[Cell]:
         """Formula cells that read ``cell``, directly or through a range."""
         out = set(self._cell_dependents.get(cell, ()))

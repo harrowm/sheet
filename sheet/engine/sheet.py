@@ -8,22 +8,25 @@ and redo are all the same operation: put these cells back.
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from typing import Self
 
 from sheet.engine.ast import Node
 from sheet.engine.cells import Cell, CellStore
 from sheet.engine.entry import parse_entry
 from sheet.engine.evaluator import evaluate
 from sheet.engine.formats import GENERAL
-from sheet.engine.graph import DependencyGraph, RecalcPlan, extract_references
+from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_references
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
+from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
 from sheet.engine.refs import Axis, delete_refs, insert_refs, render, shift_refs
 from sheet.engine.values import ErrorValue, Value
 
 Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
+SNAPSHOT_MIN_READERS = 4  # a range read by fewer formulas is not worth packing
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +72,18 @@ def _rewritten(cell: Cell, rewrite: Callable[[Node], Node]) -> Cell:
     return Cell(entry.text, entry.ast, entry.value, cell.format)
 
 
+def _contains_any(rect: Rect, positions: set[Pos]) -> bool:
+    """Whether any position lies in the rectangle, checking whichever side is smaller."""
+    area = (rect.r2 - rect.r1 + 1) * (rect.c2 - rect.c1 + 1)
+    if area <= len(positions):
+        return any(
+            (r, c) in positions
+            for r in range(rect.r1, rect.r2 + 1)
+            for c in range(rect.c1, rect.c2 + 1)
+        )
+    return any(rect.r1 <= r <= rect.r2 and rect.c1 <= c <= rect.c2 for r, c in positions)
+
+
 def _cleared(old: Cell | None) -> Cell | None:
     """What remains of a cell after its contents are cleared: just its format."""
     return None if old is None or old.format == GENERAL else Cell("", None, None, old.format)
@@ -89,11 +104,27 @@ def _value_text(value: Value) -> str:
 
 
 class Sheet:
-    def __init__(self, max_history: int = DEFAULT_MAX_HISTORY) -> None:
+    def __init__(
+        self,
+        max_history: int = DEFAULT_MAX_HISTORY,
+        workers: int | None = None,
+        parallel_threshold: int = DEFAULT_THRESHOLD,
+    ) -> None:
         self.store = CellStore()
         self.graph = DependencyGraph()
+        self._recalc = ParallelRecalculator(workers, parallel_threshold)
         self._undo: deque[_Transaction] = deque(maxlen=max_history)
         self._redo: list[_Transaction] = []
+
+    def close(self) -> None:
+        """Release the recalculation thread pool. The sheet stays usable (sequentially)."""
+        self._recalc.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # --- reading -----------------------------------------------------------------
 
@@ -298,16 +329,50 @@ class Sheet:
         return frozenset(changed)
 
     def _recalculate(self, plan: RecalcPlan, touch: Callable[[Pos], None]) -> None:
-        for pos in plan.order:
+        """Evaluate the planned cells, in parallel where the graph allows.
+
+        Each task reads only cells that finished earlier in the plan and writes only its
+        own cell, so no two tasks touch the same data.
+        """
+
+        def compute(pos: Pos) -> None:
             cell = self.store.get_cell(*pos)
             if cell is None or cell.ast is None:
-                continue
+                return
             value = evaluate(cell.ast, self.store)
             if value is None:  # a formula that returns an empty cell displays as 0
                 value = 0.0
             if not _same_value(value, cell.value):
                 touch(pos)
                 self.store.set_cell(*pos, replace(cell, value=value))
+
+        rects = self._shared_clean_ranges(plan) if len(plan.order) >= SNAPSHOT_MIN_READERS else []
+        if rects:
+            self.store.begin_snapshots(rects)
+        try:
+            self._recalc.run(plan, compute)
+        finally:
+            if rects:
+                self.store.end_snapshots()
+
+    def _shared_clean_ranges(self, plan: RecalcPlan) -> list[tuple[int, int, int, int]]:
+        """Ranges worth snapshotting before a parallel run.
+
+        A range qualifies if several planned formulas read it and none of the formulas
+        about to be recalculated sits inside it, so its numbers cannot change mid-run.
+        """
+        readers: Counter[Rect] = Counter()
+        formulas: set[Pos] = set()
+        for pos in plan.order:
+            cell = self.store.get_cell(*pos)
+            if cell is not None and cell.ast is not None:
+                formulas.add(pos)
+                readers.update(self.graph.range_dependencies(pos))
+        return [
+            tuple(rect)  # type: ignore[misc]
+            for rect, n in readers.items()
+            if n >= SNAPSHOT_MIN_READERS and not _contains_any(rect, formulas)
+        ]
 
     def _put_all(self, states: dict[Pos, Cell | None]) -> None:
         for pos, cell in states.items():

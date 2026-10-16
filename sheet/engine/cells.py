@@ -8,6 +8,8 @@ object), so readers never see a half-written cell.
 from __future__ import annotations
 
 import sys
+from array import array
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
 from sheet.engine.ast import Node
@@ -40,11 +42,26 @@ class Cell:
         return cls(entry.text, entry.ast, entry.value, fmt)
 
 
+@dataclass(frozen=True, slots=True)
+class RangeSnapshot:
+    """The numbers in a rectangle, packed into a compact array, plus its first error.
+
+    Reading a range cell by cell touches shared ``Cell`` and float objects, and under
+    free-threaded Python every thread that does so updates the same reference counts, so
+    such reads stop scaling with the number of threads. A snapshot is built once on one
+    thread; each reader then copies from a flat array and creates its own float objects.
+    """
+
+    numbers: array[float]
+    error: ErrorValue | None
+
+
 class CellStore:
     """Sparse cell storage. Implements the evaluator's ``CellReader`` protocol."""
 
     def __init__(self) -> None:
         self._cells: dict[tuple[int, int], Cell] = {}
+        self._snapshots: dict[tuple[int, int, int, int], RangeSnapshot] = {}
 
     def __len__(self) -> int:
         return len(self._cells)
@@ -100,6 +117,32 @@ class CellStore:
     def range_values(self, r1: int, c1: int, r2: int, c2: int) -> list[Value]:
         """Values of populated cells in the inclusive rectangle (empty values skipped)."""
         return [c.value for _, c in self._cells_in(r1, c1, r2, c2) if c.value is not None]
+
+    def begin_snapshots(self, rects: Iterable[tuple[int, int, int, int]]) -> None:
+        """Snapshot the numbers in each ``(r1, c1, r2, c2)`` rectangle for fast shared reads.
+
+        Only valid while no cell in those rectangles changes; call ``end_snapshots`` when
+        the phase that needed them is over.
+        """
+        built: dict[tuple[int, int, int, int], RangeSnapshot] = {}
+        for rect in rects:
+            numbers = array("d")
+            error: ErrorValue | None = None
+            for _, cell in self._cells_in(*rect):
+                v = cell.value
+                if isinstance(v, float):
+                    numbers.append(v)
+                elif error is None and isinstance(v, ErrorValue):
+                    error = v
+            built[rect] = RangeSnapshot(numbers, error)
+        self._snapshots = built
+
+    def end_snapshots(self) -> None:
+        self._snapshots = {}
+
+    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int) -> RangeSnapshot | None:
+        snapshots = self._snapshots
+        return snapshots.get((r1, c1, r2, c2)) if snapshots else None
 
     def used_range(self) -> tuple[int, int, int, int] | None:
         """(min_row, min_col, max_row, max_col) of stored cells, or None if empty."""
