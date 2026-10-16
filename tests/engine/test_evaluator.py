@@ -30,10 +30,19 @@ def err(kind):
     return ErrorValue(kind)
 
 
-@pytest.mark.parametrize("formula,expected", [
-    ("=1+2*3", 7.0), ("=10-4-3", 3.0), ("=2^3^2", 512.0), ("=-2^2", 4.0),
-    ("=50%", 0.5), ("=(1+2)*3", 9.0), ("=7/2", 3.5), ("=-(-3)", 3.0),
-])
+@pytest.mark.parametrize(
+    "formula,expected",
+    [
+        ("=1+2*3", 7.0),
+        ("=10-4-3", 3.0),
+        ("=2^3^2", 512.0),
+        ("=-2^2", 4.0),
+        ("=50%", 0.5),
+        ("=(1+2)*3", 9.0),
+        ("=7/2", 3.5),
+        ("=-(-3)", 3.0),
+    ],
+)
 def test_arithmetic(formula, expected):
     assert calc(formula) == pytest.approx(expected)
 

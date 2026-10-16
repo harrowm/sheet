@@ -19,7 +19,9 @@ def test_precedence_mul_over_add():
 
 
 def test_left_associative_subtraction():
-    assert parse("=10-4-3") == BinaryOp("-", BinaryOp("-", Literal(10.0), Literal(4.0)), Literal(3.0))
+    assert parse("=10-4-3") == BinaryOp(
+        "-", BinaryOp("-", Literal(10.0), Literal(4.0)), Literal(3.0)
+    )
 
 
 def test_power_is_right_associative():
@@ -36,11 +38,15 @@ def test_percent_postfix():
 
 
 def test_parentheses_override_precedence():
-    assert parse("=(1+2)*3") == BinaryOp("*", BinaryOp("+", Literal(1.0), Literal(2.0)), Literal(3.0))
+    assert parse("=(1+2)*3") == BinaryOp(
+        "*", BinaryOp("+", Literal(1.0), Literal(2.0)), Literal(3.0)
+    )
 
 
 def test_concat_lower_than_add_higher_than_comparison():
-    assert parse('="a"&1+2') == BinaryOp("&", Literal("a"), BinaryOp("+", Literal(1.0), Literal(2.0)))
+    assert parse('="a"&1+2') == BinaryOp(
+        "&", Literal("a"), BinaryOp("+", Literal(1.0), Literal(2.0))
+    )
     assert parse("=1&2=3") == BinaryOp("=", BinaryOp("&", Literal(1.0), Literal(2.0)), Literal(3.0))
 
 
@@ -68,7 +74,9 @@ def test_range_is_normalised_so_start_is_top_left():
 
 def test_function_call_with_range_and_args():
     node = parse("=SUM(A1:A3, 4)")
-    assert node == FuncCall("SUM", (RangeRef(CellRef(0, 0, False, False), CellRef(2, 0, False, False)), Literal(4.0)))
+    assert node == FuncCall(
+        "SUM", (RangeRef(CellRef(0, 0, False, False), CellRef(2, 0, False, False)), Literal(4.0))
+    )
 
 
 def test_function_name_is_uppercased_and_no_args_allowed():

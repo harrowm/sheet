@@ -12,7 +12,9 @@ def test_always_ends_with_eof():
     assert kinds("1")[-1] == TokenKind.EOF
 
 
-@pytest.mark.parametrize("text,value", [("42", 42.0), ("3.5", 3.5), (".5", 0.5), ("1e3", 1000.0), ("1.5E-2", 0.015)])
+@pytest.mark.parametrize(
+    "text,value", [("42", 42.0), ("3.5", 3.5), (".5", 0.5), ("1e3", 1000.0), ("1.5E-2", 0.015)]
+)
 def test_numbers(text, value):
     tok = tokenize(text)[0]
     assert tok.kind == TokenKind.NUMBER
@@ -48,8 +50,13 @@ def test_range_tokens():
 
 def test_function_call_tokens():
     assert kinds("SUM(A1,2)") == [
-        TokenKind.IDENT, TokenKind.LPAREN, TokenKind.REF, TokenKind.COMMA,
-        TokenKind.NUMBER, TokenKind.RPAREN, TokenKind.EOF,
+        TokenKind.IDENT,
+        TokenKind.LPAREN,
+        TokenKind.REF,
+        TokenKind.COMMA,
+        TokenKind.NUMBER,
+        TokenKind.RPAREN,
+        TokenKind.EOF,
     ]
 
 

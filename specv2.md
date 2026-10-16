@@ -200,3 +200,16 @@ A running log of decisions made and issues discovered while building. Newest ent
 20. **A bare range outside a function** (`=A1:A3`) evaluates to `#VALUE!`. Excel's dynamic-array spilling is out of scope.
 21. **The evaluator reads cells through a `CellReader` protocol** (`get`, `range_values`) rather than a concrete store, so it can be tested with a fake and the real store plugs in later. `range_values` must return only populated cells, which is what makes huge ranges cheap.
 22. **Recursion depth:** parsing and evaluation are recursive, so extremely deeply nested formulas could hit Python's recursion limit. A maximum nesting depth (with a syntax error beyond it) should be added.
+
+### Dates and formats
+23. **`make_serial` / `split_serial` return and accept floats**, and the fake `29 Feb 1900` (serial 60) is accepted on entry and displayed, but a real calendar has no such day, so `split_serial(60)` is special-cased. Dates before 1 Jan 1900 are rejected; serial 0 ("0 Jan 1900" in Excel) is not supported.
+24. **Times are rounded to the nearest second** before display, and a value such as `45292.999999999` carries into the next day (`02/01/2024 00:00:00`) instead of showing `24:00:00` or `59` seconds.
+25. **Date recognition on entry is limited to `D/M/YYYY` and `YYYY-M-D`.** `1/2/2024` is 1 February (day first), consistent with the `DD/MM/YYYY` default; US-style month-first entry is not supported. Ambiguity depends on locale, which is out of scope for v1.
+26. **Format tokens are case-sensitive where needed:** `MM`/`MMM` are months and `mm` is minutes, because Excel disambiguates by context and we do not. `DD`, `YY`, `YYYY`, `HH` and `SS` also accept lower case. Single `D`, `M`, `H` etc. (no zero padding) and `MMMM`, `AM/PM` are not supported yet.
+27. **A format is numeric or date, never both** (`0 DD` is a `FormatError`). Digit placeholders (`0 # , .`) must be contiguous, so Excel's `0 0` style patterns and multi-section formats (`pos;neg;zero`) are not supported.
+28. **Numeric rounding is half away from zero**, done with `Decimal(repr(value))` rather than binary floats, so `2.675` formatted as `0.00` gives `2.68` as Excel does, not `2.67`.
+29. **A value that rounds to zero shows no minus sign** (`-0.001` as `0.00` is `0.00`). Excel shows `-0.00`.
+30. **Placeholder edge cases deviate from Excel:** `#` with 0 renders an empty string, and `#.##` with `1` renders `1` (Excel shows `1.` with a trailing point).
+31. **`%` multiplies the value by 100** wherever it appears in the format. General format shows up to 10 significant digits (`0.3333333333`) and switches to exponent form for very large or small numbers.
+32. **Non-numeric values ignore the format** (text, booleans, empty and errors display as General), but an invalid format string raises `FormatError` even then, so bad formats are caught when they are set.
+33. **Format strings are compiled once and cached** (`lru_cache`), so rendering a visible grid does not re-parse formats. The cache is thread-safe under free-threaded Python, but the interning of format strings in the cell (section 5) is not yet implemented.

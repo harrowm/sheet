@@ -216,7 +216,9 @@ def _count(args: tuple[Node, ...], reader: CellReader) -> Value:
     return float(total)
 
 
-def _aggregate(fn: Callable[[list[float]], Value]) -> Callable[[tuple[Node, ...], CellReader], Value]:
+def _aggregate(
+    fn: Callable[[list[float]], Value],
+) -> Callable[[tuple[Node, ...], CellReader], Value]:
     def run(args: tuple[Node, ...], reader: CellReader) -> Value:
         nums = _numbers(args, reader)
         return nums if isinstance(nums, ErrorValue) else fn(nums)
