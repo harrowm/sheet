@@ -1,0 +1,120 @@
+"""Cells and the sparse cell store.
+
+The store is a plain ``dict[(row, col)] -> Cell``: only non-empty cells exist, and reads
+and writes are O(1). Cells are treated as immutable once stored (updates replace the
+object), so readers never see a half-written cell.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, replace
+
+from sheet.engine.ast import Node
+from sheet.engine.entry import Entry
+from sheet.engine.formats import GENERAL, validate_format
+from sheet.engine.parser import MAX_COLS, MAX_ROWS
+from sheet.engine.values import ErrorValue, Value
+
+MAX_FORMAT_CELLS = 1_000_000  # largest area set_format_range will materialise
+
+
+@dataclass(slots=True)
+class Cell:
+    text: str
+    ast: Node | None
+    value: Value
+    format: str = GENERAL
+
+    def __post_init__(self) -> None:
+        self.format = sys.intern(self.format)
+
+    @property
+    def error(self) -> ErrorValue | None:
+        return self.value if isinstance(self.value, ErrorValue) else None
+
+    @classmethod
+    def from_entry(cls, entry: Entry, current_format: str = GENERAL) -> Cell:
+        """Build a cell from a parsed entry, keeping a non-General format already set."""
+        fmt = entry.format if entry.format and current_format == GENERAL else current_format
+        return cls(entry.text, entry.ast, entry.value, fmt)
+
+
+class CellStore:
+    """Sparse cell storage. Implements the evaluator's ``CellReader`` protocol."""
+
+    def __init__(self) -> None:
+        self._cells: dict[tuple[int, int], Cell] = {}
+
+    def __len__(self) -> int:
+        return len(self._cells)
+
+    def items(self) -> list[tuple[tuple[int, int], Cell]]:
+        return list(self._cells.items())
+
+    @staticmethod
+    def _check(row: int, col: int) -> None:
+        if not (0 <= row < MAX_ROWS and 0 <= col < MAX_COLS):
+            raise IndexError(f"Cell ({row}, {col}) is outside the grid")
+
+    def get_cell(self, row: int, col: int) -> Cell | None:
+        self._check(row, col)
+        return self._cells.get((row, col))
+
+    def get(self, row: int, col: int) -> Value:
+        cell = self.get_cell(row, col)
+        return None if cell is None else cell.value
+
+    def set_cell(self, row: int, col: int, cell: Cell) -> None:
+        self._check(row, col)
+        self._cells[(row, col)] = cell
+
+    def remove(self, row: int, col: int) -> Cell | None:
+        self._check(row, col)
+        return self._cells.pop((row, col), None)
+
+    def range_values(self, r1: int, c1: int, r2: int, c2: int) -> list[Value]:
+        """Values of populated cells in the inclusive rectangle (empty values skipped).
+
+        Walks whichever is smaller: the rectangle's coordinates or the stored cells, so
+        ``A1:XFD1048576`` costs the number of cells stored, not 17 billion.
+        """
+        area = (r2 - r1 + 1) * (c2 - c1 + 1)
+        cells = self._cells
+        if area <= len(cells):
+            found = (cells.get((r, c)) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1))
+            return [c.value for c in found if c is not None and c.value is not None]
+        return [
+            cell.value
+            for (r, c), cell in list(cells.items())
+            if r1 <= r <= r2 and c1 <= c <= c2 and cell.value is not None
+        ]
+
+    def used_range(self) -> tuple[int, int, int, int] | None:
+        """(min_row, min_col, max_row, max_col) of stored cells, or None if empty."""
+        keys = list(self._cells)
+        if not keys:
+            return None
+        rows = [r for r, _ in keys]
+        cols = [c for _, c in keys]
+        return min(rows), min(cols), max(rows), max(cols)
+
+    def set_format(self, row: int, col: int, fmt: str) -> None:
+        self.set_format_range(row, col, row, col, fmt)
+
+    def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> None:
+        """Apply ``fmt`` to every cell in the rectangle, creating empty cells as needed.
+
+        All-or-nothing: an invalid format or an oversized rectangle changes nothing.
+        """
+        self._check(r1, c1)
+        self._check(r2, c2)
+        validate_format(fmt)
+        if (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_FORMAT_CELLS:
+            raise ValueError(f"Range too large to format (limit {MAX_FORMAT_CELLS} cells)")
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                old = self._cells.get((r, c))
+                self._cells[(r, c)] = (
+                    Cell("", None, None, fmt) if old is None else replace(old, format=fmt)
+                )
