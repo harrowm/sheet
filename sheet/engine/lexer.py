@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from sheet.engine.values import ErrorKind
+
 
 class FormulaSyntaxError(ValueError):
     """Raised when formula text cannot be lexed or parsed."""
@@ -26,6 +28,7 @@ class TokenKind(Enum):
     RPAREN = auto()
     COMMA = auto()
     COLON = auto()
+    ERROR = auto()
     EOF = auto()
 
 
@@ -40,6 +43,7 @@ _NUMBER = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 _REF = re.compile(r"\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 _OPS = ("<>", "<=", ">=", "+", "-", "*", "/", "^", "%", "&", "=", "<", ">")
+_ERRORS = tuple(k.value for k in ErrorKind)
 _SINGLE = {"(": TokenKind.LPAREN, ")": TokenKind.RPAREN, ",": TokenKind.COMMA, ":": TokenKind.COLON}
 
 
@@ -52,6 +56,12 @@ def tokenize(text: str) -> list[Token]:
             i += 1
         elif ch == '"':
             i = _string(text, i, tokens)
+        elif ch == "#":
+            err = next((e for e in _ERRORS if text.startswith(e, i)), None)
+            if err is None:
+                raise FormulaSyntaxError("Unknown error literal", i)
+            tokens.append(Token(TokenKind.ERROR, err, i))
+            i += len(err)
         elif ch in _SINGLE:
             tokens.append(Token(_SINGLE[ch], ch, i))
             i += 1

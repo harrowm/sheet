@@ -8,15 +8,24 @@ Grammar (lowest to highest precedence):
     power      := unary ("^" power)?          right-associative
     unary      := ("-" | "+") unary | postfix  binds tighter than ^, as in Excel
     postfix    := primary "%"*
-    primary    := NUMBER | STRING | BOOL | ref [":" ref] | IDENT "(" [args] ")" | "(" comparison ")"
+    primary    := NUMBER | STRING | BOOL | ERROR | ref [":" ref] | IDENT "(" [args] ")" | "(" comparison ")"
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from sheet.engine.ast import BinaryOp, CellRef, FuncCall, Literal, Node, RangeRef, UnaryOp
+from sheet.engine.ast import (
+    BinaryOp,
+    CellRef,
+    FuncCall,
+    Literal,
+    Node,
+    UnaryOp,
+    normalised_range,
+)
 from sheet.engine.lexer import FormulaSyntaxError, Token, TokenKind, tokenize
+from sheet.engine.values import ErrorKind, ErrorValue
 
 MAX_ROWS = 1_048_576
 MAX_COLS = 16_384
@@ -133,6 +142,9 @@ class _Parser:
                 self._next()
                 assert tok.value is not None
                 return Literal(tok.value)
+            case TokenKind.ERROR:
+                self._next()
+                return Literal(ErrorValue(ErrorKind(tok.value)))
             case TokenKind.REF:
                 return self._reference()
             case TokenKind.IDENT:
@@ -156,12 +168,7 @@ class _Parser:
             return start
         self._next()
         end = self._cell()
-        top, bottom = sorted((start, end), key=lambda c: c.row)
-        left, right = sorted((start, end), key=lambda c: c.col)
-        return RangeRef(
-            CellRef(top.row, left.col, top.abs_row, left.abs_col),
-            CellRef(bottom.row, right.col, bottom.abs_row, right.abs_col),
-        )
+        return normalised_range(start, end)
 
     def _function(self) -> Node:
         name = str(self._next().value).upper()

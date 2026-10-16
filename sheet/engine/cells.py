@@ -73,22 +73,33 @@ class CellStore:
         self._check(row, col)
         return self._cells.pop((row, col), None)
 
-    def range_values(self, r1: int, c1: int, r2: int, c2: int) -> list[Value]:
-        """Values of populated cells in the inclusive rectangle (empty values skipped).
+    def _cells_in(self, r1: int, c1: int, r2: int, c2: int) -> list[tuple[tuple[int, int], Cell]]:
+        """Stored cells in the inclusive rectangle, walking the cheaper of the two ways.
 
-        Walks whichever is smaller: the rectangle's coordinates or the stored cells, so
-        ``A1:XFD1048576`` costs the number of cells stored, not 17 billion.
+        Small rectangles are walked by coordinate and huge ones (``A1:XFD1048576``) by
+        scanning the stored cells, so the cost is bounded by the number of cells stored.
         """
         area = (r2 - r1 + 1) * (c2 - c1 + 1)
         cells = self._cells
         if area <= len(cells):
-            found = (cells.get((r, c)) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1))
-            return [c.value for c in found if c is not None and c.value is not None]
+            return [
+                ((r, c), cell)
+                for r in range(r1, r2 + 1)
+                for c in range(c1, c2 + 1)
+                if (cell := cells.get((r, c))) is not None
+            ]
         return [
-            cell.value
+            ((r, c), cell)
             for (r, c), cell in list(cells.items())
-            if r1 <= r <= r2 and c1 <= c <= c2 and cell.value is not None
+            if r1 <= r <= r2 and c1 <= c <= c2
         ]
+
+    def cells_in(self, r1: int, c1: int, r2: int, c2: int) -> dict[tuple[int, int], Cell]:
+        return dict(self._cells_in(r1, c1, r2, c2))
+
+    def range_values(self, r1: int, c1: int, r2: int, c2: int) -> list[Value]:
+        """Values of populated cells in the inclusive rectangle (empty values skipped)."""
+        return [c.value for _, c in self._cells_in(r1, c1, r2, c2) if c.value is not None]
 
     def used_range(self) -> tuple[int, int, int, int] | None:
         """(min_row, min_col, max_row, max_col) of stored cells, or None if empty."""
