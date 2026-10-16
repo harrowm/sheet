@@ -120,6 +120,17 @@ class DependencyGraph:
             self._install(cell, old_cells, old_ranges)
             raise
 
+    def restore_dependencies(
+        self, cell: Cell, cells: Iterable[Cell], ranges: Iterable[Rect]
+    ) -> None:
+        """Replace what ``cell`` reads without a cycle check.
+
+        For callers that apply a batch and check once with ``plan``, and for restoring a
+        state that is already known to be acyclic (undo, redo, rollback).
+        """
+        self._uninstall(cell)
+        self._install(cell, frozenset(cells), frozenset(ranges))
+
     def remove_cell(self, cell: Cell) -> None:
         """Drop what ``cell`` reads. Edges from cells that read it are kept."""
         self._uninstall(cell)

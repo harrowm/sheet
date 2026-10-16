@@ -157,3 +157,16 @@ def test_store_is_a_cell_reader_for_the_evaluator():
         s.set_cell(r, 0, num(v))
     assert evaluate(compile_formula("=SUM(A1:A3)*2"), s) == 12.0
     assert evaluate(compile_formula("=A1+B1"), s) == 1.0
+
+
+def test_formatted_cells_builds_changes_without_touching_the_store():
+    s = CellStore()
+    s.set_cell(0, 0, num(1))
+    changes = s.formatted_cells(0, 0, 1, 1, "0.0")
+    assert len(changes) == 4
+    assert changes[(0, 0)].value == 1.0 and changes[(0, 0)].format == "0.0"
+    assert s.get_cell(0, 0).format == "General" and len(s) == 1
+    with pytest.raises(FormatError):
+        s.formatted_cells(0, 0, 1, 1, "QQ")
+    with pytest.raises(ValueError):
+        s.formatted_cells(0, 0, MAX_ROWS - 1, MAX_COLS - 1, "0.0")

@@ -102,19 +102,27 @@ class CellStore:
     def set_format(self, row: int, col: int, fmt: str) -> None:
         self.set_format_range(row, col, row, col, fmt)
 
-    def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> None:
-        """Apply ``fmt`` to every cell in the rectangle, creating empty cells as needed.
+    def formatted_cells(
+        self, r1: int, c1: int, r2: int, c2: int, fmt: str
+    ) -> dict[tuple[int, int], Cell]:
+        """The cells that would result from applying ``fmt`` to the rectangle.
 
-        All-or-nothing: an invalid format or an oversized rectangle changes nothing.
+        Creates empty cells where none exist. Nothing is stored; raises FormatError for
+        an invalid format and ValueError if the rectangle is larger than
+        ``MAX_FORMAT_CELLS``.
         """
         self._check(r1, c1)
         self._check(r2, c2)
         validate_format(fmt)
         if (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_FORMAT_CELLS:
             raise ValueError(f"Range too large to format (limit {MAX_FORMAT_CELLS} cells)")
+        out: dict[tuple[int, int], Cell] = {}
         for r in range(r1, r2 + 1):
             for c in range(c1, c2 + 1):
                 old = self._cells.get((r, c))
-                self._cells[(r, c)] = (
-                    Cell("", None, None, fmt) if old is None else replace(old, format=fmt)
-                )
+                out[(r, c)] = Cell("", None, None, fmt) if old is None else replace(old, format=fmt)
+        return out
+
+    def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> None:
+        """Apply ``fmt`` to every cell in the rectangle. All-or-nothing."""
+        self._cells.update(self.formatted_cells(r1, c1, r2, c2, fmt))

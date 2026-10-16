@@ -279,3 +279,14 @@ def test_random_edits_match_brute_force_cycle_detection(edits):
         for n in range(8):  # graph always mirrors the model, including after rollback
             assert g.dependencies((n, 0))[0] == {(d, 0) for d in model.get(n, ())}
             assert g.dependents((n, 0)) == {(m, 0) for m, ds in model.items() if n in ds}
+
+
+def test_restore_dependencies_installs_edges_without_a_cycle_check():
+    g = DependencyGraph()
+    g.restore_dependencies(c("A1"), [c("B1")], [Rect(0, 5, 2, 5)])
+    g.restore_dependencies(c("B1"), [c("A1")], [])  # forms a cycle; trusted, not checked
+    assert g.dependents(c("A1")) == {c("B1")}
+    assert g.dependents((1, 5)) == {c("A1")}
+    g.restore_dependencies(c("A1"), [], [])
+    assert g.dependents((1, 5)) == set()
+    assert g.range_count() == 0
