@@ -27,8 +27,63 @@ sheet/engine/   lexer, parser, evaluator, cell store, dependency graph, parallel
 sheet/server/   the engine process: request/response protocol and the JSON-lines server
 sheet/ui/       PyQt6 client, table model, main window
 tests/engine/   engine and protocol tests (3.14t)      tests/ui/   UI tests (3.14 + PyQt6)
-benchmarks/     parallel recalculation benchmark shapes and runner
+benchmarks/     recalculation shapes and runner, structural-edit, and import/export/paste benchmarks
+scripts/        setup, run, test, bench and lint scripts      .githooks/  pre-commit hook (ruff)
 ```
+
+## Performance
+
+Measured with `./scripts/bench.sh` on an Apple M4 (4 performance + 6 efficiency cores), free-threaded
+Python 3.14.8. Timings vary by about 10% from run to run; the checks in `bench.sh` fail only if a
+property such as "more workers never hurts a chain" or "bulk edits do not scale with the number of
+ranges" stops holding, not on absolute times.
+
+**Parallel recalculation** (`benchmarks.run`): the same graph evaluated with 1 and with N workers.
+
+| Shape | Cells | Sequential | 4 workers | Speedup |
+|---|---|---|---|---|
+| wide (independent chains) | 1,280 | 100 ms | 35 ms | 2.9x |
+| fan-out | 1,500 | 118 ms | 42 ms | 2.8x |
+| diamond lattice | 640 | 50 ms | 17 ms | 2.9x |
+| deep chain (nothing to parallelise) | 600 | 47 ms | 48 ms | 1.0x |
+
+The default is `min(CPUs, 4)` workers (`SHEET_WORKERS` overrides it): more threads were slower on
+every shape, because threads that share objects contend on their reference counts.
+
+**Row and column inserts and deletes** (`benchmarks.structural`): a sheet that is half constants
+and half formulas, edited at the top (the worst case: every cell moves and every formula is rewritten).
+
+| Operation | 400,000 cells | 800,000 cells |
+|---|---|---|
+| insert rows | 1.7 s | 3.5 s |
+| insert columns | 2.0 s | 4.5 s |
+| delete columns (breaks every formula) | 2.2 s | 4.5 s |
+| delete rows | 1.9 s | 4.0 s |
+| undo / redo of an insert | 0.35 s | 0.8 s |
+
+Edits further down touch far less: on 800,000 cells, deleting a row near the bottom takes 0.1 s,
+inserting a column to the right of everything 0.09 s, a row in the middle 2.0 s. With 50,000 range
+formulas on a 450,000-cell sheet an insert at the top takes 4.4 s. Rewriting 20,000 inputs in a
+sheet full of range formulas stays flat (0.09 s with 1,000 ranges, 0.14 s with 8,000).
+
+**Files, CSV and paste** (`benchmarks.io`): 100,000 rows, 210,000 cells.
+
+| Operation | Time | Cells/s |
+|---|---|---|
+| save `.sheet` | 0.28 s | 745k |
+| load `.sheet` | 1.6 s | 134k |
+| export CSV (as typed / as displayed) | 0.09 s / 0.12 s | 2,400k / 1,700k |
+| import CSV | 1.8 s | 119k |
+| paste text | 1.1 s | 192k |
+| copy / paste 100,000 rows of formulas | 0.05 s / 1.5 s | 4,600k / 143k |
+
+Loading, importing and pasting are dominated by recalculating every formula, which the file format
+does not store (a file can never disagree with its formulas). **Interactive edits** on a 400,000-cell
+sheet take under 0.1 ms (undo, redo, copy, typing a value that feeds formulas).
+
+Every operation can be stopped: a request that runs longer than 60 seconds (`SHEET_TIME_LIMIT`
+changes it, 0 turns it off) is abandoned, and the UI shows a Cancel button while the engine is
+busy. A stopped edit leaves the document exactly as it was.
 
 ## How to test
 
