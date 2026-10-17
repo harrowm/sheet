@@ -262,9 +262,9 @@ class Sheet:
 
         def process(
             part: Sequence[tuple[Pos, Cell]],
-        ) -> tuple[list[tuple[Pos, Cell]], list[Pos], list[Pos], dict[Pos, _Refs]]:
+        ) -> tuple[dict[Pos, Cell], list[Pos], list[Pos], dict[Pos, _Refs]]:
             """Rewrite one chunk: cells to place, positions vacated, formulas to redo, references."""
-            placed: list[tuple[Pos, Cell]] = []
+            placed: dict[Pos, Cell] = {}
             found: dict[Pos, _Refs] = {}
             gone: list[Pos] = []
             redo_at: list[Pos] = []
@@ -284,7 +284,7 @@ class Sheet:
                 if new_pos != pos or new_cell is not cell:
                     if new_pos != pos:
                         gone.append(pos)
-                    placed.append((new_pos, new_cell))
+                    placed[new_pos] = new_cell
                     if new_cell.ast is not None:
                         found[new_pos] = extract_references(new_cell.ast)
                 if redo:
@@ -293,7 +293,7 @@ class Sheet:
 
         # Each cell is rewritten independently of the others and nothing is stored until the
         # commit, so big sheets are split into chunks and rewritten on several threads.
-        final: dict[Pos, Cell | None] = {}
+        final: dict[Pos, Cell] = {}
         vacated: set[Pos] = set()
         refs: dict[Pos, _Refs] = {}
         for placed, gone, redo_at, found in self._recalc.map(
@@ -303,11 +303,11 @@ class Sheet:
             vacated.update(gone)
             seeds.extend(redo_at)
             refs.update(found)
-        changes: dict[Pos, Cell | None] = {p: None for p in vacated if p not in final}
+        changes: dict[Pos, Cell | None] = dict.fromkeys(vacated - final.keys())
         changes.update(final)
         # Moving cells and shifting references changes no value, so only the formulas that
         # lost a reference or had a range cut (and what depends on them) are recalculated.
-        return self._commit(changes, recalculate=True, seeds=seeds, refs=refs)
+        return self._commit(changes, recalculate=True, seeds=seeds, refs=refs, certain=changes)
 
     # --- copy, paste, fill -------------------------------------------------------
 
@@ -403,8 +403,14 @@ class Sheet:
         recalculate: bool,
         seeds: list[Pos] | None = None,
         refs: Mapping[Pos, _Refs] | None = None,
+        certain: Mapping[Pos, object] | None = None,
     ) -> frozenset[Pos]:
-        """Apply ``changes``; ``refs`` optionally holds each formula's references, already found."""
+        """Apply ``changes``; ``refs`` optionally holds each formula's references, already found.
+
+        Cells in ``certain`` are known to differ from what they replace, so they are recorded
+        without comparing them (cells recalculation changes are still compared).
+        """
+        certain = certain or {}
         get = self.store.get_cell
         before: dict[Pos, Cell | None] = {}
 
@@ -428,7 +434,7 @@ class Sheet:
         redo: dict[Pos, Cell | None] = {}
         for pos, old in before.items():
             new = get(*pos)
-            if old is not new and not _same_cell(old, new):
+            if old is not new and (pos in certain or not _same_cell(old, new)):
                 undo[pos] = old
                 redo[pos] = new
         changed = undo.keys()
