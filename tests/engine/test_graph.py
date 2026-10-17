@@ -309,3 +309,82 @@ def test_restore_dependencies_installs_edges_without_a_cycle_check():
     g.restore_dependencies(c("A1"), [], [])
     assert g.dependents((1, 5)) == set()
     assert range_count(g) == 0
+
+
+# --- the range index: which ranges contain a given cell? ----------------------------------------------------
+
+from sheet.engine.graph import _RowIntervals
+
+
+def brute(rects, row):
+    return {r for r in rects if r.r1 <= row <= r.r2}
+
+
+def test_row_intervals_basic():
+    idx = _RowIntervals()
+    assert not idx
+    a, b, c = Rect(0, 0, 8, 0), Rect(5, 0, 5, 0), Rect(0, 0, 1_048_575, 0)
+    for r in (a, b, c):
+        idx.add(r)
+    assert idx
+    assert set(idx.stab(0)) == {a, c} and set(idx.stab(5)) == {a, b, c} and set(idx.stab(9)) == {c}
+    assert set(idx.stab(1_048_575)) == {c}
+    idx.remove(b)
+    assert set(idx.stab(5)) == {a, c}
+    for r in (a, c):
+        idx.remove(r)
+    assert not idx and list(idx.stab(5)) == []
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    st.lists(
+        st.tuples(st.integers(0, 60), st.integers(0, 40), st.booleans()),
+        min_size=0,
+        max_size=60,
+    ),
+    st.lists(st.integers(0, 120), max_size=15),
+)
+def test_row_intervals_match_a_brute_force_scan_through_adds_and_removes(spec, probes):
+    idx, live = _RowIntervals(), set()
+    for start, height, remove in spec:
+        rect = Rect(start, 0, start + height, 0)
+        if remove and rect in live:
+            idx.remove(rect)
+            live.discard(rect)
+        elif rect not in live:
+            idx.add(rect)
+            live.add(rect)
+        for row in probes:
+            assert set(idx.stab(row)) == brute(live, row)
+    for row in range(110):
+        assert set(idx.stab(row)) == brute(live, row)
+
+
+def test_many_short_ranges_are_found_without_scanning_them_all():
+    g = DependencyGraph()
+    n = 20_000
+    for r in range(
+        n
+    ):  # a running sum down column C reading the nine cells above it, as in a ledger
+        g.restore_dependencies((r, 2), [], [Rect(max(0, r - 8), 0, r, 0)])
+    start = time.perf_counter()
+    hits = [len(g.dependents((r, 0))) for r in range(0, n, 2)]
+    elapsed = time.perf_counter() - start
+    assert (
+        hits[5] == 9 and hits[0] == 9
+    )  # row 10: the sums at rows 10..18; row 0: those at rows 0..8
+    assert elapsed < 5  # 10,000 lookups: ~0.1 s now; scanning all 20,000 ranges for each took ~15 s
+
+
+def test_removing_and_replacing_ranges_keeps_the_index_exact():
+    g = DependencyGraph()
+    for r in range(200):
+        g.restore_dependencies((r, 2), [], [Rect(r, 0, r + 3, 0)])
+    for r in range(0, 200, 2):
+        g.restore_dependencies((r, 2), [], [])
+    for r in range(1, 200, 2):
+        g.restore_dependencies((r, 2), [], [Rect(0, 0, 1, 0)])  # replaced by something else
+    assert g.dependents((0, 0)) == {(r, 2) for r in range(1, 200, 2)}
+    assert g.dependents((100, 0)) == set()
+    assert range_count(g) == 1

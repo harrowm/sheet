@@ -16,6 +16,7 @@ downstream of, a cycle.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -51,6 +52,55 @@ class RecalcPlan:
     successors: dict[Cell, list[Cell]]  # edges inside the subgraph
 
 
+class _RowIntervals:
+    """The row spans of the ranges covering one column: "which of them contain row r?".
+
+    Scanning every range for every changed cell is quadratic in a sheet full of running-total
+    formulas (a bulk edit of 20,000 inputs with 8,000 ranges took 5.7 s). Instead the ranges
+    are grouped by height class (class ``k`` holds heights in ``(2**(k-1), 2**k]``) and kept
+    sorted by first row. A range of class ``k`` that contains row ``r`` must start within
+    ``2**k - 1`` rows above it, so each class needs one binary search and then looks only at
+    the ranges starting in that small window.
+    """
+
+    __slots__ = ("_classes",)
+
+    def __init__(self) -> None:
+        self._classes: dict[int, tuple[list[int], list[Rect]]] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._classes)
+
+    @staticmethod
+    def _class_of(rect: Rect) -> int:
+        return (rect.r2 - rect.r1).bit_length()  # height 1 -> 0, 2 -> 1, 3-4 -> 2, 5-8 -> 3, ...
+
+    def add(self, rect: Rect) -> None:
+        starts, rects = self._classes.setdefault(self._class_of(rect), ([], []))
+        i = bisect_right(starts, rect.r1)
+        starts.insert(i, rect.r1)
+        rects.insert(i, rect)
+
+    def remove(self, rect: Rect) -> None:
+        k = self._class_of(rect)
+        starts, rects = self._classes[k]
+        i = rects.index(rect, bisect_left(starts, rect.r1), bisect_right(starts, rect.r1))
+        del starts[i]
+        del rects[i]
+        if not starts:
+            del self._classes[k]
+
+    def stab(self, row: int) -> list[Rect]:
+        """The ranges whose rows include ``row``."""
+        found: list[Rect] = []
+        for k, (starts, rects) in self._classes.items():
+            lo = bisect_left(starts, row - (1 << k) + 1)
+            for i in range(lo, bisect_right(starts, row)):
+                if rects[i].r2 >= row:
+                    found.append(rects[i])
+        return found
+
+
 def extract_references(node: Node) -> tuple[set[Cell], set[Rect]]:
     """Cells and ranges read by an AST."""
     cells: set[Cell] = set()
@@ -77,7 +127,7 @@ class DependencyGraph:
         self._range_deps: dict[Cell, frozenset[Rect]] = {}
         self._cell_dependents: dict[Cell, set[Cell]] = {}
         self._range_dependents: dict[Rect, set[Cell]] = {}
-        self._range_cols: dict[int, set[Rect]] = {}  # column -> narrow ranges covering it
+        self._range_cols: dict[int, _RowIntervals] = {}  # column -> its narrow ranges
         self._wide_ranges: set[Rect] = set()
 
     # --- queries ---------------------------------------------------------------
@@ -93,13 +143,14 @@ class DependencyGraph:
         """Formula cells that read ``cell``, directly or through a range."""
         out = set(self._cell_dependents.get(cell, ()))
         row, col = cell
-        candidates = [*self._range_cols.get(col, ()), *self._wide_ranges]
-        for rect in candidates:
+        column = self._range_cols.get(col)
+        if column is not None:
+            for rect in column.stab(row):
+                out |= self._range_dependents[rect]
+        for rect in self._wide_ranges:
             if rect.r1 <= row <= rect.r2 and rect.c1 <= col <= rect.c2:
-                out |= self._range_dependents.get(rect, set())
+                out |= self._range_dependents[rect]
         return out
-
-    # --- edits -------------------------------------------------------------------
 
     def restore_dependencies(
         self, cell: Cell, cells: Iterable[Cell], ranges: Iterable[Rect]
@@ -148,7 +199,7 @@ class DependencyGraph:
             self._wide_ranges.add(rect)
         else:
             for col in range(rect.c1, rect.c2 + 1):
-                self._range_cols.setdefault(col, set()).add(rect)
+                self._range_cols.setdefault(col, _RowIntervals()).add(rect)
 
     def _unindex_range(self, rect: Rect) -> None:
         if rect in self._wide_ranges:
@@ -156,7 +207,7 @@ class DependencyGraph:
             return
         for col in range(rect.c1, rect.c2 + 1):
             bucket = self._range_cols[col]
-            bucket.discard(rect)
+            bucket.remove(rect)
             if not bucket:
                 del self._range_cols[col]
 
