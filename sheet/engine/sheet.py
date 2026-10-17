@@ -29,7 +29,7 @@ from sheet.engine.values import ErrorValue, Value
 Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
 PARALLEL_REWRITE_MIN = 20_000  # structural edits rewrite on the thread pool above this many cells
-PARALLEL_REWRITE_CHUNK = 5_000  # cells per task when they do
+PARALLEL_REWRITE_CHUNK = 1_000  # cells per task when they do
 DEFAULT_MAX_HISTORY_CELLS = 1_000_000  # total changed cells the undo/redo history may hold
 SNAPSHOT_MIN_READERS = 4  # a range read by fewer formulas is not worth packing
 
@@ -52,6 +52,9 @@ class _Transaction:
 
 def _same_value(a: Value, b: Value) -> bool:
     return type(a) is type(b) and a == b
+
+
+_Refs = tuple[Iterable[Pos], Iterable[Rect]]  # what a formula reads: cells, ranges
 
 
 def _same_cell(a: Cell | None, b: Cell | None) -> bool:
@@ -259,9 +262,10 @@ class Sheet:
 
         def process(
             part: Sequence[tuple[Pos, Cell]],
-        ) -> tuple[list[tuple[Pos, Cell]], list[Pos], list[Pos]]:
-            """Rewrite one chunk of cells: (cells to place, positions vacated, formulas to redo)."""
+        ) -> tuple[list[tuple[Pos, Cell]], list[Pos], list[Pos], dict[Pos, _Refs]]:
+            """Rewrite one chunk: cells to place, positions vacated, formulas to redo, references."""
             placed: list[tuple[Pos, Cell]] = []
+            found: dict[Pos, _Refs] = {}
             gone: list[Pos] = []
             redo_at: list[Pos] = []
             for pos, cell in part:
@@ -281,25 +285,29 @@ class Sheet:
                     if new_pos != pos:
                         gone.append(pos)
                     placed.append((new_pos, new_cell))
+                    if new_cell.ast is not None:
+                        found[new_pos] = extract_references(new_cell.ast)
                 if redo:
                     redo_at.append(new_pos)
-            return placed, gone, redo_at
+            return placed, gone, redo_at, found
 
         # Each cell is rewritten independently of the others and nothing is stored until the
         # commit, so big sheets are split into chunks and rewritten on several threads.
         final: dict[Pos, Cell | None] = {}
         vacated: set[Pos] = set()
-        for placed, gone, redo_at in self._recalc.map(
+        refs: dict[Pos, _Refs] = {}
+        for placed, gone, redo_at, found in self._recalc.map(
             process, self.store.items(), PARALLEL_REWRITE_MIN, PARALLEL_REWRITE_CHUNK
         ):
             final.update(placed)
             vacated.update(gone)
             seeds.extend(redo_at)
+            refs.update(found)
         changes: dict[Pos, Cell | None] = {p: None for p in vacated if p not in final}
         changes.update(final)
         # Moving cells and shifting references changes no value, so only the formulas that
         # lost a reference or had a range cut (and what depends on them) are recalculated.
-        return self._commit(changes, recalculate=True, seeds=seeds)
+        return self._commit(changes, recalculate=True, seeds=seeds, refs=refs)
 
     # --- copy, paste, fill -------------------------------------------------------
 
@@ -394,18 +402,21 @@ class Sheet:
         changes: Mapping[Pos, Cell | None],
         recalculate: bool,
         seeds: list[Pos] | None = None,
+        refs: Mapping[Pos, _Refs] | None = None,
     ) -> frozenset[Pos]:
+        """Apply ``changes``; ``refs`` optionally holds each formula's references, already found."""
+        get = self.store.get_cell
         before: dict[Pos, Cell | None] = {}
 
         def touch(pos: Pos) -> None:
             if pos not in before:
-                before[pos] = self.store.get_cell(*pos)
+                before[pos] = get(*pos)
 
         try:
-            for pos in changes:
-                touch(pos)  # also bounds-checks every position before the first write
+            # Reading every old cell also bounds-checks every position before the first write.
+            before.update({pos: get(*pos) for pos in changes})
             for pos, cell in changes.items():
-                self._put(pos, cell)
+                self._put(pos, cell, None if refs is None else refs.get(pos))
             if recalculate:
                 plan = self.graph.plan(list(changes) if seeds is None else seeds)  # CycleError here
                 self._recalculate(plan, touch)
@@ -413,8 +424,14 @@ class Sheet:
             self._put_all(before)
             raise
 
-        after = {pos: self.store.get_cell(*pos) for pos in before}
-        changed = {pos for pos in before if not _same_cell(before[pos], after[pos])}
+        undo: dict[Pos, Cell | None] = {}
+        redo: dict[Pos, Cell | None] = {}
+        for pos, old in before.items():
+            new = get(*pos)
+            if old is not new and not _same_cell(old, new):
+                undo[pos] = old
+                redo[pos] = new
+        changed = undo.keys()
         self.last_undo_dropped = False
         if not changed:
             return frozenset()
@@ -423,9 +440,7 @@ class Sheet:
             self.clear_history()
             self.last_undo_dropped = True
             return frozenset(changed)
-        self._undo.append(
-            _Transaction({p: before[p] for p in changed}, {p: after[p] for p in changed})
-        )
+        self._undo.append(_Transaction(undo, redo))
         self._redo.clear()
         while len(self._undo) > self._max_history or (
             len(self._undo) > 1 and self.history_cells > self._max_history_cells
@@ -483,7 +498,7 @@ class Sheet:
         for pos, cell in states.items():
             self._put(pos, cell)
 
-    def _put(self, pos: Pos, cell: Cell | None) -> None:
+    def _put(self, pos: Pos, cell: Cell | None, refs: _Refs | None = None) -> None:
         """Store a cell (or remove it) and bring its graph edges in line with its AST."""
         if cell is None:
             self.store.remove(*pos)
@@ -493,5 +508,5 @@ class Sheet:
             self.graph.remove_cell(pos)
         else:
             self.store.set_cell(*pos, cell)
-            cells, ranges = extract_references(cell.ast)
+            cells, ranges = extract_references(cell.ast) if refs is None else refs
             self.graph.restore_dependencies(pos, cells, ranges)

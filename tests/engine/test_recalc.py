@@ -155,9 +155,20 @@ def test_an_exception_stops_the_run_propagates_and_leaves_the_pool_usable(pool):
     assert len(rec.started) == len(plan.order)
 
 
-def test_worker_count_defaults_to_the_cpu_count():
+def test_worker_count_defaults_to_the_cpu_count_capped_at_four(monkeypatch):
+    monkeypatch.delenv("SHEET_WORKERS", raising=False)
     r = ParallelRecalculator()
-    assert r.workers == (os.cpu_count() or 1)
+    assert r.workers == max(1, min(os.cpu_count() or 1, 4))
+    r.close()
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"), [("7", 7), ("1", 1), ("0", None), ("-3", None), ("x", None)]
+)
+def test_sheet_workers_environment_variable_overrides_the_default(monkeypatch, setting, expected):
+    monkeypatch.setenv("SHEET_WORKERS", setting)
+    r = ParallelRecalculator()
+    assert r.workers == (expected or max(1, min(os.cpu_count() or 1, 4)))
     r.close()
 
 

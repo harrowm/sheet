@@ -129,6 +129,22 @@ class _Run:
             self.finish_task()
 
 
+MAX_DEFAULT_WORKERS = (
+    4  # measured best; more threads slowed both recalculation and structural edits
+)
+
+
+def default_workers() -> int:
+    """Worker threads to use: ``SHEET_WORKERS`` if set to a positive integer, else the CPU
+    count capped at four (extra threads contended for memory and, on machines with
+    efficiency cores, ran slower)."""
+    try:
+        wanted = int(os.environ.get("SHEET_WORKERS", ""))
+    except ValueError:
+        wanted = 0
+    return wanted if wanted > 0 else max(1, min(os.cpu_count() or 1, MAX_DEFAULT_WORKERS))
+
+
 class ParallelRecalculator:
     def __init__(
         self,
@@ -136,7 +152,7 @@ class ParallelRecalculator:
         threshold: int = DEFAULT_THRESHOLD,
         grain: int = DEFAULT_GRAIN,
     ) -> None:
-        self.workers = workers if workers is not None else (os.cpu_count() or 1)
+        self.workers = workers if workers is not None else default_workers()
         self.threshold = threshold
         self.grain = grain
         self._pool: ThreadPoolExecutor | None = None
