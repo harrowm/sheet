@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Refuse a commit that fails ruff or the format check. Enabled by scripts/setup.sh
+# (git config core.hooksPath .githooks). Skip once with: git commit --no-verify
+exec "$(git rev-parse --show-toplevel)/scripts/lint.sh" --fast

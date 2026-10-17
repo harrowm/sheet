@@ -16,7 +16,8 @@ A spreadsheet with a parallel recalculation engine. Supported platforms: macOS a
 scripts/setup.sh      install both environments (.venv for the engine, .venv-ui for the UI)
 scripts/run.sh        start the spreadsheet
 scripts/test.sh       run all tests  (test.sh engine | test.sh ui for one half)
-scripts/bench.sh      run the parallel-recalculation benchmarks and check the speedups
+scripts/bench.sh      run the benchmarks (recalculation, structural edits, import/export) and check them
+scripts/lint.sh       ruff, format check and mypy --strict (lint.sh --fast: ruff only)
 ```
 
 ## Layout
@@ -91,7 +92,8 @@ bottom-right of the status bar should read "Engine: free-threaded Python (GIL of
 ```
 ./scripts/test.sh          # all tests (engine and UI)
 ./scripts/test.sh ui       # only the UI tests
-./scripts/bench.sh         # parallel-recalculation benchmarks
+./scripts/bench.sh         # benchmarks
+./scripts/lint.sh          # ruff + mypy; setup.sh also installs a pre-commit hook running lint.sh --fast
 ```
 
 ### If something goes wrong
