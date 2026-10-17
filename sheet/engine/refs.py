@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from sheet.engine.address import column_name
@@ -145,10 +145,25 @@ def _index(ref: CellRef, axis: Axis) -> int:
     return ref.row if axis is Axis.ROW else ref.col
 
 
-def insert_refs(node: Node, axis: Axis, at: int, count: int) -> Node:
+@dataclass
+class Effects:
+    """Set by ``insert_refs`` / ``delete_refs``: could the rewrite change the formula's value?
+
+    A uniform shift of references never does, so the formula keeps its old value. A reference
+    that lost its target (``#REF!``), or a range cut by a deletion, may.
+    """
+
+    value_may_change: bool = False
+
+
+def insert_refs(
+    node: Node, axis: Axis, at: int, count: int, effects: Effects | None = None
+) -> Node:
     """Re-point references after ``count`` rows/columns are inserted before index ``at``.
 
-    A range spanning the insertion point grows; one that ends just before it does not.
+    A range spanning the insertion point grows; one that ends just before it does not. The
+    new rows or columns are empty, so growing a range never changes a value; only a
+    reference pushed off the grid (``#REF!``) can.
     """
 
     def move(i: int) -> int:
@@ -156,7 +171,11 @@ def insert_refs(node: Node, axis: Axis, at: int, count: int) -> Node:
 
     def ref(r: CellRef) -> CellRef | None:
         i = move(_index(r, axis))
-        return _on_axis(r, axis, i) if i < axis.limit else None
+        if i < axis.limit:
+            return _on_axis(r, axis, i)
+        if effects is not None:
+            effects.value_may_change = True
+        return None
 
     def rng(r: RangeRef) -> RangeRef | None:
         start, end = ref(r.start), ref(r.end)
@@ -165,7 +184,9 @@ def insert_refs(node: Node, axis: Axis, at: int, count: int) -> Node:
     return map_refs(node, ref, rng)
 
 
-def delete_refs(node: Node, axis: Axis, at: int, count: int) -> Node:
+def delete_refs(
+    node: Node, axis: Axis, at: int, count: int, effects: Effects | None = None
+) -> Node:
     """Re-point references after rows/columns ``at .. at+count-1`` are deleted.
 
     References into the deleted band become ``#REF!``; ranges shrink, and one that is
@@ -173,14 +194,23 @@ def delete_refs(node: Node, axis: Axis, at: int, count: int) -> Node:
     """
     band_end = at + count
 
+    def lost() -> None:
+        if effects is not None:
+            effects.value_may_change = True
+
     def ref(r: CellRef) -> CellRef | None:
         i = _index(r, axis)
         if i < at:
             return r
-        return None if i < band_end else _on_axis(r, axis, i - count)
+        if i < band_end:
+            lost()
+            return None
+        return _on_axis(r, axis, i - count)
 
     def rng(r: RangeRef) -> RangeRef | None:
         s, e = _index(r.start, axis), _index(r.end, axis)
+        if e >= at and s < band_end:  # touches or spans the deleted band: it loses cells
+            lost()
         new_s = s if s < at else at if s < band_end else s - count
         new_e = e if e < at else at - 1 if e < band_end else e - count
         if new_s > new_e:

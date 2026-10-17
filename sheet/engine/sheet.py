@@ -13,8 +13,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Self
 
-from sheet.engine.ast import Node
+from sheet.engine.ast import Literal, Node
 from sheet.engine.cells import Cell, CellStore
+from sheet.engine.compiler import fold_constants
 from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.evaluator import evaluate
 from sheet.engine.formats import GENERAL
@@ -22,7 +23,7 @@ from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_refere
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
 from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
-from sheet.engine.refs import Axis, delete_refs, insert_refs, render, shift_refs
+from sheet.engine.refs import Axis, Effects, delete_refs, insert_refs, render, shift_refs
 from sheet.engine.values import ErrorValue, Value
 
 Pos = tuple[int, int]
@@ -62,16 +63,34 @@ def _same_cell(a: Cell | None, b: Cell | None) -> bool:
     )
 
 
-def _rewritten(cell: Cell, rewrite: Callable[[Node], Node]) -> Cell:
-    """The cell with its formula's references rewritten, or the same cell if none change.
+def _rewritten(
+    cell: Cell, rewrite: Callable[[Node, Effects], Node], carry_value: bool = False
+) -> tuple[Cell, bool]:
+    """The cell with its formula's references rewritten, and whether its value must be redone.
 
-    The text is regenerated from the *unfolded* parse (the stored AST has constants
-    folded away), then compiled again, so the stored AST stays folded.
+    Returns the same cell if no reference changes. Otherwise the new text is regenerated from
+    the *unfolded* parse of the old text (the stored AST has constants folded away) and the
+    new stored AST is that tree folded again; each changed formula is parsed once. If the
+    rewrite only shifted references (``Effects.value_may_change`` is false) and
+    ``carry_value`` is set, the formula keeps its old value, so a move does not recalculate it.
+    Pasting must not carry values: the pasted references point at different cells.
     """
-    if cell.ast is None or rewrite(cell.ast) == cell.ast:
-        return cell
-    entry = parse_entry("=" + render(rewrite(parse(cell.text.strip()))), enforce_limits=False)
-    return Cell(entry.text, entry.ast, entry.value, cell.format)
+    if cell.ast is None:
+        return cell, False
+    effects = Effects()
+    if rewrite(cell.ast, effects) == cell.ast:
+        return cell, False
+    tree = rewrite(parse(cell.text.strip()), Effects())
+    ast = fold_constants(tree)
+    text = "=" + render(tree)
+    if effects.value_may_change or cell.value is None or not carry_value:
+        value = (
+            ast.value if isinstance(ast, Literal) else None
+        )  # a constant formula knows its value
+        # Its value may differ from before even when already known (a folded #REF!), so whatever
+        # reads this cell must be recalculated: it seeds the recalculation either way.
+        return Cell(text, ast, value, cell.format), True
+    return Cell(text, ast, cell.value, cell.format), False
 
 
 def _check_write_size(cells: int) -> None:
@@ -228,11 +247,13 @@ class Sheet:
         if not 0 <= at < axis.limit:
             raise IndexError(f"{at} is outside the grid")
         band_end = at + count
-        rewrite = (
-            (lambda node: insert_refs(node, axis, at, count))
-            if insert
-            else (lambda node: delete_refs(node, axis, at, count))
-        )
+
+        def rewrite(node: Node, fx: Effects) -> Node:
+            if insert:
+                return insert_refs(node, axis, at, count, fx)
+            return delete_refs(node, axis, at, count, fx)
+
+        seeds: list[Pos] = []  # moved formulas whose value may now differ
         final: dict[Pos, Cell | None] = {}
         vacated: set[Pos] = set()
         for pos, cell in self.store.items():
@@ -247,14 +268,18 @@ class Sheet:
                 vacated.add(pos)
                 continue
             new_pos = (new_i, pos[1]) if axis is Axis.ROW else (pos[0], new_i)
-            new_cell = _rewritten(cell, rewrite)
+            new_cell, redo = _rewritten(cell, rewrite, carry_value=True)
             if new_pos != pos or new_cell is not cell:
                 if new_pos != pos:
                     vacated.add(pos)
                 final[new_pos] = new_cell
+            if redo:
+                seeds.append(new_pos)
         changes: dict[Pos, Cell | None] = {p: None for p in vacated if p not in final}
         changes.update(final)
-        return self._commit(changes, recalculate=True)
+        # Moving cells and shifting references changes no value, so only the formulas that
+        # lost a reference or had a range cut (and what depends on them) are recalculated.
+        return self._commit(changes, recalculate=True, seeds=seeds)
 
     # --- copy, paste, fill -------------------------------------------------------
 
@@ -305,6 +330,10 @@ class Sheet:
         if row < 0 or col < 0 or row + clip.rows > MAX_ROWS or col + clip.cols > MAX_COLS:
             raise ValueError("Paste would extend beyond the edge of the grid")
         d_row, d_col = row - clip.origin[0], col - clip.origin[1]
+
+        def shifted(node: Node, fx: Effects) -> Node:
+            return shift_refs(node, d_row, d_col)
+
         changes: dict[Pos, Cell | None] = {}
         target = self.store.cells_in(row, col, row + clip.rows - 1, col + clip.cols - 1)
         for pos, existing in target.items():
@@ -317,7 +346,7 @@ class Sheet:
                 entry = parse_entry(_value_text(src.value))
                 changes[pos] = Cell.from_entry(entry, fmt) if entry.text.strip() else _cleared(old)
             else:
-                changes[pos] = _rewritten(src, lambda node: shift_refs(node, d_row, d_col))
+                changes[pos] = _rewritten(src, shifted)[0]
         return changes
 
     # --- history -----------------------------------------------------------------
@@ -340,7 +369,12 @@ class Sheet:
 
     # --- internals ---------------------------------------------------------------
 
-    def _commit(self, changes: Mapping[Pos, Cell | None], recalculate: bool) -> frozenset[Pos]:
+    def _commit(
+        self,
+        changes: Mapping[Pos, Cell | None],
+        recalculate: bool,
+        seeds: list[Pos] | None = None,
+    ) -> frozenset[Pos]:
         before: dict[Pos, Cell | None] = {}
 
         def touch(pos: Pos) -> None:
@@ -353,7 +387,8 @@ class Sheet:
             for pos, cell in changes.items():
                 self._put(pos, cell)
             if recalculate:
-                self._recalculate(self.graph.plan(list(changes)), touch)  # CycleError here
+                plan = self.graph.plan(list(changes) if seeds is None else seeds)  # CycleError here
+                self._recalculate(plan, touch)
         except BaseException:
             self._put_all(before)
             raise
