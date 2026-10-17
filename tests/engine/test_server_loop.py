@@ -52,6 +52,20 @@ def test_hostile_lines_get_an_error_reply_and_the_server_carries_on(bad):
     assert replies[1]["ok"] is True
 
 
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+def test_non_standard_json_constants_are_rejected(constant):
+    replies = run(b'{"id":1,"op":"hello","pad":' + constant + b"}", HELLO)
+    assert replies[0]["ok"] is False and replies[0]["error"]["kind"] == "invalid"
+    assert replies[1]["ok"] is True
+
+
+def test_every_reply_is_strict_json_even_if_the_client_sent_a_weird_id():
+    out = io.StringIO()
+    serve(io.BytesIO(b'{"id":1e999,"op":"hello"}\n{"id":[1],"op":"hello"}\n'), out)
+    for line in out.getvalue().splitlines():
+        json.loads(line, parse_constant=lambda c: pytest.fail(f"non-standard constant {c}"))
+
+
 def test_blank_lines_are_ignored_and_every_other_line_is_answered():
     assert len(run(b"", b"   ", HELLO, b"\t", HELLO)) == 2
 

@@ -15,6 +15,10 @@ from typing import Any, BinaryIO, TextIO
 from sheet.server.protocol import Session
 
 
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not valid JSON")  # Python accepts NaN/Infinity; JSON does not
+
+
 def _invalid(message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"kind": "invalid", "message": message}}
 
@@ -22,7 +26,7 @@ def _invalid(message: str) -> dict[str, Any]:
 def _parse(raw: bytes) -> tuple[Any, dict[str, Any] | None]:
     """Decode one request line. Returns (request, None) or (None, error response)."""
     try:
-        return json.loads(raw.decode("utf-8")), None
+        return json.loads(raw.decode("utf-8"), parse_constant=_reject_constant), None
     except UnicodeDecodeError:
         return None, _invalid("request is not valid UTF-8")
     except RecursionError:
@@ -48,7 +52,11 @@ def serve(stdin: BinaryIO | None = None, stdout: TextIO | None = None) -> int:
             if response is None:
                 response = session.handle(request)
             try:
-                stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+                try:
+                    line = json.dumps(response, separators=(",", ":"), allow_nan=False)
+                except ValueError:  # a non-finite number slipped into a reply: say so, don't crash
+                    line = json.dumps(_invalid("internal error: reply was not valid JSON"))
+                stdout.write(line + "\n")
                 stdout.flush()
             except BrokenPipeError:
                 break  # the client has gone away; nothing left to do

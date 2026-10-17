@@ -90,6 +90,27 @@ def _bounds(positions: frozenset[Pos]) -> list[int] | None:
     return [min(rows), min(cols), max(rows), max(cols)]
 
 
+MAX_ID_LENGTH = 100
+
+
+def _request_id(request: Request) -> int | str | None:
+    """The client's id, which is echoed back: an integer or a short string, nothing else.
+
+    Echoing arbitrary values would let one request make the reply huge or not valid JSON
+    (``Infinity``), so anything else is refused.
+    """
+    if "id" not in request:
+        return None
+    rid = request["id"]
+    if isinstance(rid, bool) or not isinstance(rid, int | str):
+        raise _invalid("id must be an integer or a string")
+    if isinstance(rid, str) and len(rid) > MAX_ID_LENGTH:
+        raise _invalid(f"id is longer than {MAX_ID_LENGTH} characters")
+    if isinstance(rid, int) and abs(rid) >= 2**53:
+        raise _invalid("id is out of range")
+    return rid
+
+
 class Session:
     """One open spreadsheet and the state a client needs around it."""
 
@@ -133,10 +154,11 @@ class Session:
 
     def handle(self, request: object) -> Response:
         """Carry out one request. Never raises."""
-        req_id = request.get("id") if isinstance(request, dict) else None
+        req_id: int | str | None = None
         try:
             if not isinstance(request, dict):
                 raise _invalid("a request must be an object")
+            req_id = _request_id(request)
             op = request.get("op")
             handler = self._ops.get(op) if isinstance(op, str) else None
             if handler is None:

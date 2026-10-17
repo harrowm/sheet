@@ -393,3 +393,21 @@ def test_server_exits_cleanly_when_stdin_closes():
     )
     proc.stdin.close()
     assert proc.wait(timeout=30) == 0
+
+
+@pytest.mark.parametrize("good", [0, 1, 41, -7, "abc", "", "x" * 100, 2**53 - 1])
+def test_ids_that_are_integers_or_short_strings_are_echoed(session, good):
+    assert session.handle({"op": "hello", "id": good})["id"] == good
+
+
+@pytest.mark.parametrize(
+    "bad", [True, False, 1.5, float("inf"), float("nan"), [1], {"a": 1}, "x" * 101, 2**53, -(2**60)]
+)
+def test_other_ids_are_refused_and_never_echoed(session, bad):
+    resp = session.handle({"op": "hello", "id": bad})
+    assert (
+        resp["ok"] is False
+        and resp["error"]["kind"] == "invalid"
+        and "id" in resp["error"]["message"]
+    )
+    assert "id" not in resp
