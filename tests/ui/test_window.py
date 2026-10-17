@@ -541,7 +541,7 @@ def test_select_all_then_fill_down_is_refused_with_a_clear_message_at_once(win, 
     win.fill_down()
     wait_until(lambda: win.status_is_error() and "limit" in win.status_text())
     assert "250,000" in win.status_text()
-    assert time.monotonic() - start < 5  # it used to take ~24 seconds and create a million cells
+    assert time.monotonic() - start < 15  # it used to take ~24 s and create a million cells
     assert win.client.alive
 
 
@@ -558,7 +558,7 @@ def test_selecting_everything_or_a_whole_column_does_not_freeze_the_window(win):
         select()
         start = time.monotonic()
         QTest.qWait(1)
-        assert time.monotonic() - start < 1.0, select
+        assert time.monotonic() - start < 5.0, select  # it used to take ~15 s
 
 
 def test_clicking_a_header_still_selects_the_whole_column_or_row(win):

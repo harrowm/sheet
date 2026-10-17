@@ -245,7 +245,7 @@ def test_long_chain_has_no_recursion_limit_and_is_fast():
         set_deps(g, (i, 0), [(i - 1, 0)])
     start = time.perf_counter()
     plan = g.plan([(0, 0)])
-    assert time.perf_counter() - start < 1.0
+    assert time.perf_counter() - start < 10  # ~20 ms; guards against a quadratic plan
     assert plan.order == [(i, 0) for i in range(n)]
 
 

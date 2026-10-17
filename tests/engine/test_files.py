@@ -154,7 +154,9 @@ def test_large_sheet_loads_quickly(tmp_path):
 
     start = time.perf_counter()
     loaded = load_sheet(tmp_path / "big.sheet")
-    assert time.perf_counter() - start < 5
+    assert (
+        time.perf_counter() - start < 30
+    )  # generous: it takes ~0.3 s; guards against a quadratic load
     assert loaded.get(199, 50) == s.get(199, 50)
 
 

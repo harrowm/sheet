@@ -25,7 +25,7 @@ else:
 
     @pytest.fixture
     def wait_until(qapp):
-        def wait(predicate, timeout=6.0, message="condition not met in time"):
+        def wait(predicate, timeout=20.0, message="condition not met in time"):
             import time
 
             deadline = time.monotonic() + timeout

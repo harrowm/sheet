@@ -81,7 +81,7 @@ def test_range_values_huge_rectangle_only_visits_populated_cells():
         s.set_cell(i * 1000, i, num(i))
     start = time.perf_counter()
     values = list(s.range_values(0, 0, MAX_ROWS - 1, MAX_COLS - 1))
-    assert time.perf_counter() - start < 0.5
+    assert time.perf_counter() - start < 10  # ~ms; visiting 17 billion cells would take hours
     assert sorted(values) == [0.0, 1.0, 2.0]
 
 

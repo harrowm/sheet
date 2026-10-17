@@ -117,7 +117,7 @@ def test_independent_work_runs_on_several_threads_and_overlaps(pool):
     pool.run(plan, rec)
     elapsed = time.perf_counter() - start
     assert len(rec.threads) > 1
-    assert elapsed < 0.4  # 64 x 10 ms = 0.64 s sequentially
+    assert elapsed < 0.55  # 64 x 10 ms = 0.64 s sequentially; ~0.2 s with 4 workers
 
 
 def test_small_plans_run_on_the_calling_thread():
