@@ -270,3 +270,74 @@ def test_random_sheets_round_trip_exactly(tmp_path_factory, edits, formats):
     loaded = load_sheet(path)
     assert state(loaded) == state(s)
     assert {p: x.ast for p, x in loaded.store.items()} == {p: x.ast for p, x in s.store.items()}
+
+
+# --- permissions and links ---------------------------------------------------------------------
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
+
+
+@pytest.fixture
+def umask():
+    """Set the process umask for a test and restore it afterwards."""
+    saved = os.umask(0o022)
+
+    def set_(value):
+        os.umask(value)
+
+    yield set_
+    os.umask(saved)
+
+
+@posix_only
+@pytest.mark.parametrize("mask,expected", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
+def test_a_new_file_gets_the_mode_the_umask_allows(tmp_path, umask, mask, expected):
+    umask(mask)
+    s = Sheet()
+    put(s, "A1", "1")
+    save_sheet(s, tmp_path / "new.sheet")
+    assert os.stat(tmp_path / "new.sheet").st_mode & 0o777 == expected
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o664, 0o640, 0o600, 0o444 | 0o200])
+def test_overwriting_a_file_keeps_its_mode(tmp_path, umask, mode):
+    umask(0o077)  # a stricter umask must not change an existing file's mode
+    path = tmp_path / "doc.sheet"
+    path.write_text("old")
+    os.chmod(path, mode)
+    s = Sheet()
+    put(s, "A1", "1")
+    save_sheet(s, path)
+    assert os.stat(path).st_mode & 0o777 == mode
+    assert load_sheet(path).get(0, 0) == 1.0
+
+
+@posix_only
+def test_saving_through_a_symlink_updates_the_real_file_and_keeps_the_link(tmp_path):
+    real = tmp_path / "real.sheet"
+    real.write_text("old")
+    link = tmp_path / "link.sheet"
+    link.symlink_to(real)
+    s = Sheet()
+    put(s, "A1", "linked")
+    save_sheet(s, link)
+    assert link.is_symlink()
+    assert load_sheet(real).get(0, 0) == "linked"
+
+
+@posix_only
+def test_saving_through_a_dangling_symlink_creates_the_target(tmp_path):
+    link = tmp_path / "link.sheet"
+    link.symlink_to(tmp_path / "later.sheet")
+    s = Sheet()
+    put(s, "A1", "x")
+    save_sheet(s, link)
+    assert link.is_symlink() and (tmp_path / "later.sheet").exists()
+
+
+def test_saving_over_a_directory_is_an_oserror_and_leaves_no_temp_files(tmp_path):
+    (tmp_path / "dir.sheet").mkdir()
+    with pytest.raises(OSError):
+        save_sheet(Sheet(), tmp_path / "dir.sheet")
+    assert [p.name for p in tmp_path.iterdir()] == ["dir.sheet"]

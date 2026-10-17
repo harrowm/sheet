@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import secrets
 from pathlib import Path
 from typing import Any, TypeGuard
 
@@ -58,8 +58,14 @@ def save_sheet(sheet: Sheet, path: str | os.PathLike[str]) -> int:
             record.append(index[cell.format])
         rows.append(record)
 
-    target = Path(path)
-    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    target = Path(os.path.realpath(path))  # save through a symlink into the file it points to
+    try:
+        mode: int | None = os.stat(target).st_mode & 0o7777  # keep an existing file's permissions
+    except FileNotFoundError:
+        mode = None
+    # Created with 0o666 so the process umask decides a new file's mode (mkstemp would force 0o600).
+    tmp_name = str(target.parent / f".{target.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(
@@ -69,6 +75,8 @@ def save_sheet(sheet: Sheet, path: str | os.PathLike[str]) -> int:
                 f.write(_dump(record) + (",\n" if i < len(rows) - 1 else "\n"))
             f.write("]}\n")
             f.flush()
+            if mode is not None and hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
             os.fsync(f.fileno())
         os.replace(tmp_name, target)
     except BaseException:
