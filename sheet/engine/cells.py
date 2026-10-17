@@ -69,6 +69,8 @@ class CellStore:
     def __init__(self) -> None:
         self._cells: dict[tuple[int, int], Cell] = {}
         self._snapshots: dict[tuple[int, int, int, int], RangeSnapshot] = {}
+        self._used: tuple[int, int, int, int] | None = None  # cached ``used_range``
+        self._used_known = True  # False once a write may have changed it
 
     def __len__(self) -> int:
         return len(self._cells)
@@ -92,9 +94,27 @@ class CellStore:
     def set_cell(self, row: int, col: int, cell: Cell) -> None:
         self._check(row, col)
         self._cells[(row, col)] = cell
+        if self._used_known:  # keep the cached used range current (cheap: a few comparisons)
+            used = self._used
+            if used is None:
+                self._used = (row, col, row, col)
+            elif not (used[0] <= row <= used[2] and used[1] <= col <= used[3]):
+                self._used = (
+                    min(used[0], row),
+                    min(used[1], col),
+                    max(used[2], row),
+                    max(used[3], col),
+                )
 
     def remove(self, row: int, col: int) -> Cell | None:
         self._check(row, col)
+        used = self._used
+        if (
+            self._used_known
+            and used is not None
+            and (row in (used[0], used[2]) or col in (used[1], used[3]))
+        ):
+            self._used_known = False  # a cell on the edge went: the edge may have moved in
         return self._cells.pop((row, col), None)
 
     def _cells_in(self, r1: int, c1: int, r2: int, c2: int) -> list[tuple[tuple[int, int], Cell]]:
@@ -153,12 +173,16 @@ class CellStore:
 
     def used_range(self) -> tuple[int, int, int, int] | None:
         """(min_row, min_col, max_row, max_col) of stored cells, or None if empty."""
-        keys = list(self._cells)
-        if not keys:
-            return None
-        rows = [r for r, _ in keys]
-        cols = [c for _, c in keys]
-        return min(rows), min(cols), max(rows), max(cols)
+        if not self._used_known:
+            # Requests run one at a time, and recalculation only replaces existing cells (which
+            # cannot move the edges), so nothing writes new positions while this scans.
+            self._used_known = True
+            if not self._cells:
+                self._used = None
+            else:
+                rows, cols = zip(*list(self._cells), strict=True)
+                self._used = (min(rows), min(cols), max(rows), max(cols))
+        return self._used
 
     def formatted_cells(
         self, r1: int, c1: int, r2: int, c2: int, fmt: str

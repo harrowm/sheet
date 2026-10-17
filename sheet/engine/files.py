@@ -196,4 +196,5 @@ def load_sheet(path: str | os.PathLike[str], **sheet_options: Any) -> Sheet:
         sheet.close()
         raise
     sheet.clear_history()
+    sheet.mark_saved()  # what was just read is, by definition, the saved content
     return sheet

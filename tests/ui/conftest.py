@@ -58,3 +58,37 @@ else:
             return box[0]
 
         return run
+
+    SLOW_ENGINE = """
+import time
+from sheet.server import main
+from sheet.server.protocol import Session
+
+original_init = Session.__init__
+
+def init(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    def slow(_request):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:  # a stand-in for a very long edit
+            self._token.check()
+            time.sleep(0.002)
+        return {}
+    self._ops["slow"] = slow
+
+Session.__init__ = init
+raise SystemExit(main.serve())
+"""
+
+    @pytest.fixture
+    def slow_engine(qapp, wait_until):
+        """An engine with one extra operation, ``slow``, that runs until it is cancelled."""
+        from sheet.ui.launcher import engine_command
+
+        client = EngineClient(command=[*engine_command()[:-2], "-c", SLOW_ENGINE])
+        ready = []
+        client.ready.connect(ready.append)
+        client.start()
+        wait_until(lambda: ready, message="slow engine did not start")
+        yield client
+        client.shutdown()

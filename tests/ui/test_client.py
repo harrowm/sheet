@@ -115,3 +115,24 @@ def test_stray_stderr_does_not_break_the_protocol(qapp, wait_until):
 def test_command_can_be_overridden_by_environment(monkeypatch):
     monkeypatch.setenv("SHEET_ENGINE_PYTHON", "/opt/custom/python")
     assert engine_command() == ["/opt/custom/python", "-m", "sheet.server"]
+
+
+def test_cancel_stops_outstanding_requests_and_the_engine_stays_usable(slow_engine, wait_until):
+    answers = []
+    slow_engine.request("slow", answers.append)
+    slow_engine.request("edit", answers.append, entries=[[0, 0, "1"]])  # queued behind it
+    wait_until(lambda: slow_engine.busy)
+    slow_engine.cancel()
+    wait_until(lambda: len(answers) == 2)
+    assert answers[0]["ok"] is False and answers[0]["error"]["kind"] == "cancelled"
+    assert answers[1]["error"]["kind"] == "cancelled"  # the queued edit was cancelled too
+    after = []
+    slow_engine.request("edit", after.append, entries=[[0, 0, "2"]])
+    wait_until(lambda: after)
+    assert after[0]["ok"] is True  # nothing was left half done
+    assert not slow_engine.busy
+
+
+def test_cancel_with_nothing_outstanding_does_nothing(engine, call):
+    engine.cancel()
+    assert call("hello")["ok"] is True

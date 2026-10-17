@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPushButton,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
@@ -124,7 +125,6 @@ class MainWindow(QMainWindow):
         self._copied: str | None = None  # text last copied inside the app (see paste)
         self._formula_dirty = False
         self.current_path: str | None = None  # the document's file; None until saved or opened
-        self._saved_version = client.version  # engine version when last saved or loaded
         self._busy = False
         self._status_error = False
         self.actions_by_name: dict[str, QAction] = {}
@@ -179,10 +179,15 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel()
         self.busy_label = QLabel("Calculating…")
         self.busy_label.hide()
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setToolTip("Stop the calculation; nothing will be changed")
+        self.cancel_button.hide()
+        self.cancel_button.clicked.connect(self.cancel_work)
         self.engine_label = QLabel("Engine: starting…")
         status = self.statusBar()
         status.addWidget(self.status_label, 1)
         status.addPermanentWidget(self.busy_label)
+        status.addPermanentWidget(self.cancel_button)
         status.addPermanentWidget(self.engine_label)
         self._message_timer = self._single_shot_timer(MESSAGE_MS, lambda: self.show_message(""))
         self._busy_timer = self._single_shot_timer(BUSY_DELAY_MS, self._show_busy)
@@ -342,10 +347,16 @@ class MainWindow(QMainWindow):
         else:
             self._busy_timer.stop()
             self.busy_label.hide()
+            self.cancel_button.hide()
 
     def _show_busy(self) -> None:
         if self._busy:
             self.busy_label.show()
+            self.cancel_button.show()
+
+    def cancel_work(self) -> None:
+        """Stop what the engine is doing; the edit is undone and an error is shown."""
+        self.client.cancel()
 
     def _update_undo_actions(self) -> None:
         self.actions_by_name["undo"].setEnabled(self.client.can_undo)
@@ -546,7 +557,7 @@ class MainWindow(QMainWindow):
 
     def is_dirty(self) -> bool:
         """True if the engine's document has changed since it was last saved or loaded."""
-        return self.client.version != self._saved_version
+        return self.client.modified
 
     def _update_title(self) -> None:
         name = Path(self.current_path).name if self.current_path else "Untitled"
@@ -614,7 +625,6 @@ class MainWindow(QMainWindow):
         if not response.get("ok"):
             return False  # the model has reported the error; the old document is untouched
         self.current_path = path
-        self._saved_version = response["version"]
         self._update_title()
         return True
 
@@ -636,7 +646,6 @@ class MainWindow(QMainWindow):
             self._report_error(response["error"]["kind"], response["error"]["message"])
             return False
         self.current_path = path
-        self._saved_version = response["version"]
         self._update_title()
         self.show_message(f"Saved {response['cells']} cells to {path}")
         return True

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from sheet.engine.ast import Literal, Node
 from sheet.engine.cells import Cell, CellStore
@@ -23,7 +23,7 @@ from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_refere
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
-from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
+from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator, no_check
 from sheet.engine.refs import (
     REACH_SHIFT,
     Axis,
@@ -36,10 +36,14 @@ from sheet.engine.refs import (
 )
 from sheet.engine.values import ErrorValue, Value
 
+if TYPE_CHECKING:
+    from sheet.engine.cancel import CancelToken
+
 Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
 PARALLEL_REWRITE_MIN = 20_000  # structural edits rewrite on the thread pool above this many cells
 PARALLEL_REWRITE_CHUNK = 1_000  # cells per task when they do
+CHECK_EVERY = 4095  # long loops test for cancellation when ``i & CHECK_EVERY`` is 0
 PARALLEL_PARSE_MIN = 5_000  # entries are parsed on the thread pool above this many
 PARALLEL_PARSE_CHUNK = 1_000  # entries per task when they are
 DEFAULT_MAX_HISTORY_CELLS = 1_000_000  # total changed cells the undo/redo history may hold
@@ -60,6 +64,7 @@ class Clipboard:
 class _Transaction:
     before: dict[Pos, Cell | None]
     after: dict[Pos, Cell | None]
+    serial: int = 0  # unique per sheet; tells which transaction is on top of the undo history
 
 
 def _same_value(a: Value, b: Value) -> bool:
@@ -188,15 +193,22 @@ class Sheet:
         workers: int | None = None,
         parallel_threshold: int = DEFAULT_THRESHOLD,
         max_history_cells: int = DEFAULT_MAX_HISTORY_CELLS,
+        cancel: CancelToken | None = None,
     ) -> None:
         self.store = CellStore()
         self.graph = DependencyGraph()
         self._recalc = ParallelRecalculator(workers, parallel_threshold)
+        # Long loops call this; with a token it raises ``Cancelled`` on cancel or timeout.
+        self._checkpoint: Callable[[], None] = cancel.check if cancel is not None else no_check
+        self._recalc.checkpoint = self._checkpoint
         self._undo: deque[_Transaction] = deque()
         self._max_history = max_history
         self._max_history_cells = max_history_cells
         self.last_undo_dropped = False  # the latest change was too big to keep in the history
         self._redo: list[_Transaction] = []
+        self._serial = 0  # last transaction serial handed out
+        self._epoch = 0  # bumped whenever the whole history is thrown away
+        self._saved_token = self._history_token()
 
     def close(self) -> None:
         """Release the recalculation thread pool. The sheet stays usable (sequentially)."""
@@ -217,6 +229,24 @@ class Sheet:
     def history_cells(self) -> int:
         """Changed cells currently held by the undo and redo history."""
         return sum(len(tx.before) for tx in (*self._undo, *self._redo))
+
+    def _history_token(self) -> tuple[int, int]:
+        """Names the document's current content: which history it is, and the transaction
+        on top of it. Undoing and redoing back to the same point gives the same token."""
+        return self._epoch, self._undo[-1].serial if self._undo else 0
+
+    def mark_saved(self) -> None:
+        """Remember the current content as the saved one (see ``modified``)."""
+        self._saved_token = self._history_token()
+
+    @property
+    def modified(self) -> bool:
+        """Whether the content differs from when ``mark_saved`` was last called.
+
+        Editing and then undoing back to the saved point is not a modification. A change too
+        big to keep in the history, or ``clear_history``, always counts as one.
+        """
+        return self._history_token() != self._saved_token
 
     @property
     def can_undo(self) -> bool:
@@ -285,7 +315,8 @@ class Sheet:
 
     def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> frozenset[Pos]:
         """Apply a display format to a rectangle as one transaction."""
-        return self._commit(self.store.formatted_cells(r1, c1, r2, c2, fmt), recalculate=False)
+        changes = self.store.formatted_cells(r1, c1, r2, c2, fmt)
+        return self._commit(changes, recalculate=False, graph_unchanged=True)
 
     def load_cells(self, items: Iterable[tuple[int, int, Entry, str]]) -> None:
         """Fill the sheet from saved cells ``(row, col, entry, format)`` in one transaction.
@@ -304,6 +335,7 @@ class Sheet:
     def clear_history(self) -> None:
         self._undo.clear()
         self._redo.clear()
+        self._epoch += 1  # content can no longer be matched against an earlier saved point
 
     # --- structural edits --------------------------------------------------------
 
@@ -497,11 +529,14 @@ class Sheet:
         seeds: list[Pos] | None = None,
         refs: Mapping[Pos, _Refs] | None = None,
         certain: Mapping[Pos, object] | None = None,
+        graph_unchanged: bool = False,
     ) -> frozenset[Pos]:
         """Apply ``changes``; ``refs`` optionally holds each formula's references, already found.
 
         Cells in ``certain`` are known to differ from what they replace, so they are recorded
-        without comparing them (cells recalculation changes are still compared).
+        without comparing them (cells recalculation changes are still compared). With
+        ``graph_unchanged`` no cell's formula changes (a format change), so the dependency
+        graph is left alone and cells go straight into the store.
         """
         certain = certain or {}
         get = self.store.get_cell
@@ -514,8 +549,7 @@ class Sheet:
         try:
             # Reading every old cell also bounds-checks every position before the first write.
             before.update({pos: get(*pos) for pos in changes})
-            for pos, cell in changes.items():
-                self._put(pos, cell, None if refs is None else refs.get(pos))
+            self._write(changes, refs, graph_unchanged)
             if recalculate:
                 plan = self.graph.plan(list(changes) if seeds is None else seeds)  # CycleError here
                 self._recalculate(plan, touch)
@@ -539,13 +573,37 @@ class Sheet:
             self.clear_history()
             self.last_undo_dropped = True
             return frozenset(changed)
-        self._undo.append(_Transaction(undo, redo))
+        self._serial += 1
+        self._undo.append(_Transaction(undo, redo, self._serial))
         self._redo.clear()
         while len(self._undo) > self._max_history or (
             len(self._undo) > 1 and self.history_cells > self._max_history_cells
         ):
             self._undo.popleft()
         return frozenset(changed)
+
+    def _write(
+        self,
+        changes: Mapping[Pos, Cell | None],
+        refs: Mapping[Pos, _Refs] | None,
+        skip_graph: bool,
+    ) -> None:
+        """Put every change into the store (and, unless ``skip_graph``, the graph).
+
+        Tests for cancellation every few thousand cells. ``skip_graph`` is for changes
+        that leave every formula as it was (a format change): the graph is left alone.
+        """
+        store = self.store
+        for i, (pos, cell) in enumerate(changes.items()):
+            if not i & CHECK_EVERY:
+                self._checkpoint()
+            if skip_graph:
+                if cell is None:
+                    store.remove(*pos)
+                else:
+                    store.set_cell(*pos, cell)
+            else:
+                self._put(pos, cell, None if refs is None else refs.get(pos))
 
     def _recalculate(self, plan: RecalcPlan, touch: Callable[[Pos], None]) -> None:
         """Evaluate the planned cells, in parallel where the graph allows.
@@ -555,6 +613,7 @@ class Sheet:
         """
 
         def compute(pos: Pos) -> None:
+            self._checkpoint()
             cell = self.store.get_cell(*pos)
             if cell is None or cell.ast is None:
                 return

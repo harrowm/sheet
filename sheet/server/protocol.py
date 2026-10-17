@@ -4,16 +4,25 @@ A request is a dict with an ``op`` (and an optional ``id`` that is echoed back);
 is a dict with ``ok``. Failures are ``{"ok": false, "error": {"kind", "message"}}`` and
 never raise, so a bad request cannot take the engine down. Every successful response also
 carries the document ``version`` (bumped whenever anything changes) and the undo/redo
-availability, so a client can tell when cached data is stale without asking.
+availability, so a client can tell when cached data is stale without asking, and
+``modified``: whether the document differs from when it was last saved or loaded.
+
+A request that runs longer than the time limit (60 seconds; ``SHEET_TIME_LIMIT`` changes it,
+0 turns it off) is stopped with a ``timeout`` error, and ``{"op": "cancel", "target": id}``
+stops request ``id`` with a ``cancelled`` error (a server answers a cancel immediately, even
+while busy; see ``main.serve``). Either way the document is left exactly as it was.
 
 Cell positions are 0-based ``[row, col]``; rectangles are ``[r1, c1, r2, c2]`` (inclusive).
 """
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
 from typing import TYPE_CHECKING, Any
 
+from sheet.engine.cancel import CancelledError, CancelToken
 from sheet.engine.csv_io import CsvError, export_csv, import_csv
 from sheet.engine.files import FileFormatError, load_sheet, save_sheet
 from sheet.engine.formats import FormatError, format_value
@@ -27,6 +36,8 @@ from sheet.engine.values import ErrorValue
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+DEFAULT_TIME_LIMIT = 60.0  # seconds a request may run; SHEET_TIME_LIMIT overrides, 0 means no limit
+MAX_REMEMBERED_CANCELS = 1_000  # cancels for requests that have not started yet
 MAX_VIEW_CELLS = 20_000  # largest viewport a client may request
 CHANGED_LIMIT = 5_000  # above this a response gives only the bounds of what changed
 
@@ -114,11 +125,32 @@ def _request_id(request: Request) -> int | str | None:
     return rid
 
 
+def default_time_limit() -> float:
+    """Seconds one request may run: ``SHEET_TIME_LIMIT`` if it is a number, else 60. Zero (or a
+    negative number) turns the limit off."""
+    try:
+        wanted = float(os.environ.get("SHEET_TIME_LIMIT", ""))
+    except ValueError:
+        return DEFAULT_TIME_LIMIT
+    return wanted if wanted > 0 and wanted != float("inf") else 0.0
+
+
 class Session:
     """One open spreadsheet and the state a client needs around it."""
 
-    def __init__(self, workers: int | None = None, max_history_cells: int | None = None) -> None:
-        self._sheet_options: dict[str, Any] = {"workers": workers}
+    def __init__(
+        self,
+        workers: int | None = None,
+        max_history_cells: int | None = None,
+        time_limit: float | None = None,
+    ) -> None:
+        self.time_limit = default_time_limit() if time_limit is None else time_limit
+        self._token = CancelToken()
+        self._lock = threading.Lock()  # guards the fields below, which ``cancel`` touches
+        self._current_id: int | str | None = None
+        self._running = False
+        self._cancel_ids: dict[int | str, None] = {}  # requests to refuse when they start
+        self._sheet_options: dict[str, Any] = {"workers": workers, "cancel": self._token}
         if max_history_cells is not None:
             self._sheet_options["max_history_cells"] = max_history_cells
         self.sheet = Sheet(**self._sheet_options)
@@ -147,6 +179,7 @@ class Session:
             "new": self._new,
             "import_csv": self._import_csv,
             "export_csv": self._export_csv,
+            "cancel": lambda _r: {},  # (a running server intercepts it; see ``Session.cancel``)
             "shutdown": lambda _r: {},
         }
 
@@ -166,15 +199,18 @@ class Session:
             handler = self._ops.get(op) if isinstance(op, str) else None
             if handler is None:
                 raise _invalid(f"unknown op {op!r}")
-            body = handler(request)
+            body = self._run(handler, request, req_id)
             response: Response = {"ok": True, **body}
             response["version"] = self.version
             response["can_undo"] = self.sheet.can_undo
             response["can_redo"] = self.sheet.can_redo
+            response["modified"] = self.sheet.modified
         except RequestError as exc:
             response = {"ok": False, "error": {"kind": exc.kind, "message": str(exc), **exc.extra}}
         except FormulaSyntaxError as exc:
             response = {"ok": False, "error": {"kind": "syntax", "message": str(exc)}}
+        except CancelledError as exc:
+            response = {"ok": False, "error": {"kind": exc.reason, "message": str(exc)}}
         except RecursionError:
             response = {
                 "ok": False,
@@ -202,6 +238,45 @@ class Session:
         if req_id is not None:
             response["id"] = req_id
         return response
+
+    # --- time limit and cancellation ---------------------------------------------------
+
+    def _run(
+        self, handler: Callable[[Request], Response], request: Request, req_id: object
+    ) -> Response:
+        """Run one handler under the time limit; refuse it outright if it was cancelled early."""
+        with self._lock:
+            self._running = True
+            self._current_id = req_id if isinstance(req_id, int | str) else None
+            self._token.start(self.time_limit)
+            if self._current_id is not None and self._current_id in self._cancel_ids:
+                del self._cancel_ids[self._current_id]
+                self._token.cancel()
+        try:
+            self._token.check()  # a request cancelled while it was still queued never starts
+            return handler(request)
+        finally:
+            with self._lock:
+                self._running = False
+                self._current_id = None
+                self._token.stop()
+
+    def cancel(self, target: object = None) -> None:
+        """Cancel the running request, or the one with id ``target``. Safe from any thread.
+
+        A target that has not started yet is refused as soon as it does; one that has
+        finished is ignored. With no target, whatever is running is cancelled.
+        """
+        with self._lock:
+            if target is None:
+                if self._running:
+                    self._token.cancel()
+            elif self._running and target == self._current_id:
+                self._token.cancel()
+            elif isinstance(target, int | str) and not isinstance(target, bool):
+                self._cancel_ids[target] = None
+                while len(self._cancel_ids) > MAX_REMEMBERED_CANCELS:
+                    del self._cancel_ids[next(iter(self._cancel_ids))]
 
     # --- helpers -----------------------------------------------------------------------
 
@@ -354,7 +429,9 @@ class Session:
 
     def _save(self, request: Request) -> Response:
         path = _text(request, "path")
-        return {"cells": save_sheet(self.sheet, path), "path": path}
+        cells = save_sheet(self.sheet, path)
+        self.sheet.mark_saved()
+        return {"cells": cells, "path": path}
 
     def _replace_sheet(self, sheet: Sheet) -> None:
         """Swap in a new document. The old one is closed only after the new one exists."""

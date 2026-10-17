@@ -479,6 +479,20 @@ def test_save_uses_the_current_path_and_a_failed_save_stays_dirty(win, put, wait
     assert win.is_dirty()
 
 
+def test_undoing_back_to_the_saved_content_removes_the_modified_marker(
+    win, put, wait_until, tmp_path
+):
+    put(("A1", "1"))
+    win.save_file(str(tmp_path / "u.sheet"))
+    wait_until(lambda: not win.is_dirty() and "u.sheet" in win.windowTitle())
+    put(("A1", "2"))
+    wait_until(lambda: win.is_dirty() and "*" in win.windowTitle())
+    win.actions_by_name["undo"].trigger()
+    wait_until(lambda: not win.is_dirty() and "*" not in win.windowTitle())
+    win.actions_by_name["redo"].trigger()
+    wait_until(lambda: win.is_dirty() and "*" in win.windowTitle())
+
+
 def test_save_as_adds_the_extension():
     from sheet.ui.window import with_extension
 
@@ -583,3 +597,16 @@ def test_selection_still_paints_for_the_visible_cells(win, put, wait_until):
     QTest.qWait(50)
     assert win.selection_rect() == (0, 0, 1, 1)
     assert not win.grab().isNull()  # painting a selection does not fail
+
+
+def test_the_cancel_button_appears_while_busy_and_stops_the_work(slow_engine, qapp, wait_until):
+    w = MainWindow(slow_engine, interactive=False)
+    w.show()
+    wait_until(lambda: "free-threaded" in w.engine_label.text())
+    assert not w.cancel_button.isVisible()
+    slow_engine.request("slow")
+    wait_until(lambda: w.cancel_button.isVisible() and w.busy_label.isVisible())
+    w.cancel_button.click()
+    wait_until(lambda: not slow_engine.busy)
+    wait_until(lambda: not w.cancel_button.isVisible())
+    w.close()

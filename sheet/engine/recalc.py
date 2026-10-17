@@ -145,6 +145,10 @@ def default_workers() -> int:
     return wanted if wanted > 0 else max(1, min(os.cpu_count() or 1, MAX_DEFAULT_WORKERS))
 
 
+def no_check() -> None:
+    pass
+
+
 class ParallelRecalculator:
     def __init__(
         self,
@@ -158,6 +162,9 @@ class ParallelRecalculator:
         self._pool: ThreadPoolExecutor | None = None
         self._pool_lock = threading.Lock()
         self._closed = False
+        # Called at the start of every ``map`` chunk; it raises to abandon the work (see
+        # ``cancel.py``). Chunks that have not started then stop at once.
+        self.checkpoint: Callable[[], None] = no_check
 
     def close(self) -> None:
         """Shut the thread pool down. Later runs execute sequentially."""
@@ -196,12 +203,18 @@ class ParallelRecalculator:
             return []
         pool = self._get_pool() if self.workers > 1 and n >= min_items else None
         size = max(chunk, -(-n // (self.workers * 4)))  # at most about four chunks per worker
+        checkpoint = self.checkpoint
+
+        def run_chunk(part: Sequence[_T]) -> _R:
+            checkpoint()
+            return fn(part)
+
         if pool is None or size >= n:
-            return [fn(items)]
+            return [run_chunk(items)]
         parts = [items[i : i + size] for i in range(0, n, size)]
-        futures = [pool.submit(fn, part) for part in parts[1:]]
+        futures = [pool.submit(run_chunk, part) for part in parts[1:]]
         try:
-            results = [fn(parts[0])]
+            results = [run_chunk(parts[0])]
         finally:
             wait(futures)  # never leave chunks running behind an exception
         return results + [f.result() for f in futures]

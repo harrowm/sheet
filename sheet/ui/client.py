@@ -27,7 +27,7 @@ def _engine_error(message: str) -> dict[str, Any]:
 class EngineClient(QObject):
     ready = pyqtSignal(dict)  # the engine answered hello
     failed = pyqtSignal(str)  # the engine could not start or died unexpectedly
-    state_changed = pyqtSignal()  # version, can_undo or can_redo changed
+    state_changed = pyqtSignal()  # version, can_undo, can_redo or modified changed
     busy_changed = pyqtSignal(bool)  # requests are outstanding / all answered
 
     def __init__(self, command: list[str] | None = None, parent: QObject | None = None) -> None:
@@ -48,6 +48,7 @@ class EngineClient(QObject):
         self.version = 0
         self.can_undo = False
         self.can_redo = False
+        self.modified = False  # the engine's document differs from its last save or load
 
     # --- lifecycle ---------------------------------------------------------------------
 
@@ -100,6 +101,18 @@ class EngineClient(QObject):
             self.busy_changed.emit(True)
         return req_id
 
+    def cancel(self) -> None:
+        """Ask the engine to stop everything it has been sent and not yet answered.
+
+        Each stopped request is still answered, with a ``cancelled`` error, and the document
+        is left as it was. Requests that finish first are answered normally.
+        """
+        if not self.alive:
+            return
+        for target in list(self._pending):
+            message = {"op": "cancel", "target": target, "id": f"cancel-{target}"}
+            self._process.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
+
     # --- receiving ---------------------------------------------------------------------
 
     def _on_output(self) -> None:
@@ -130,9 +143,10 @@ class EngineClient(QObject):
             response["version"],
             response.get("can_undo", False),
             response.get("can_redo", False),
+            response.get("modified", False),
         )
-        if state != (self.version, self.can_undo, self.can_redo):
-            self.version, self.can_undo, self.can_redo = state
+        if state != (self.version, self.can_undo, self.can_redo, self.modified):
+            self.version, self.can_undo, self.can_redo, self.modified = state
             self.state_changed.emit()
 
     @staticmethod

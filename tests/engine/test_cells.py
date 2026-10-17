@@ -154,3 +154,19 @@ def test_formatting_as_general_removes_cells_that_would_be_empty_and_unformatted
     assert changes[(0, 0)] is None  # empty and General again: no cell at all
     assert changes[(2, 0)] is None  # never existed: nothing to create
     assert changes[(1, 0)].value == 5.0 and changes[(1, 0)].format == "General"  # has content: kept
+
+
+def test_formatting_a_formula_keeps_its_dependencies_and_undoes_cleanly():
+    from sheet.engine.sheet import Sheet
+
+    s = Sheet()
+    s.set_entries([(0, 0, "2"), (0, 1, "=A1*3"), (0, 2, "=B1+1")])
+    before = {pos: s.graph.dependencies(pos) for pos in [(0, 1), (0, 2)]}
+    s.set_format_range(0, 0, 3, 3, "0.00")
+    assert {pos: s.graph.dependencies(pos) for pos in [(0, 1), (0, 2)]} == before
+    s.set_entry(0, 0, "5")  # still recalculates through the unchanged graph
+    assert s.get(0, 2) == 16.0
+    s.undo()
+    s.undo()  # the edit, then the format
+    assert s.store.get_cell(0, 1).format == "General"
+    assert {pos: s.graph.dependencies(pos) for pos in [(0, 1), (0, 2)]} == before
