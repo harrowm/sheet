@@ -15,6 +15,11 @@ MAX_FORMULA_LENGTH = 8192
 MAX_NESTING = 64
 REQUIRED_RECURSION_LIMIT = 30_000
 
+# Most cells one selection-based operation (fill, paste) may write. Each written formula is
+# re-parsed, so the cost is about 25 microseconds a cell: this keeps the worst case near
+# six seconds instead of letting an accidental select-all freeze the engine for minutes.
+MAX_WRITE_CELLS = 250_000
+
 
 def ensure_recursion_headroom() -> None:
     if sys.getrecursionlimit() < REQUIRED_RECURSION_LIMIT:

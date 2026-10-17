@@ -19,6 +19,7 @@ from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.evaluator import evaluate
 from sheet.engine.formats import GENERAL
 from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_references
+from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
 from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
 from sheet.engine.refs import Axis, delete_refs, insert_refs, render, shift_refs
@@ -71,6 +72,14 @@ def _rewritten(cell: Cell, rewrite: Callable[[Node], Node]) -> Cell:
         return cell
     entry = parse_entry("=" + render(rewrite(parse(cell.text.strip()))), enforce_limits=False)
     return Cell(entry.text, entry.ast, entry.value, cell.format)
+
+
+def _check_write_size(cells: int) -> None:
+    if cells > MAX_WRITE_CELLS:
+        raise ValueError(
+            f"Too many cells: this would write {cells:,}, and the limit is "
+            f"{MAX_WRITE_CELLS:,} cells. Select a smaller area."
+        )
 
 
 def _contains_any(rect: Rect, positions: set[Pos]) -> bool:
@@ -267,12 +276,14 @@ class Sheet:
         Empty cells in the copied area clear their targets. With ``values_only`` the
         calculated values are pasted as constants and target formats are kept.
         """
+        _check_write_size(len(clip.cells))
         return self._commit(self._paste_changes(clip, row, col, values_only), recalculate=True)
 
     def fill_down(self, r1: int, c1: int, r2: int, c2: int) -> frozenset[Pos]:
         """Copy the top row of the rectangle into the rows below it."""
         r1, r2, c1, c2 = min(r1, r2), max(r1, r2), min(c1, c2), max(c1, c2)
         clip = self.copy(r1, c1, r1, c2)
+        _check_write_size(max(len(clip.cells), 1) * (r2 - r1))
         changes: dict[Pos, Cell | None] = {}
         for r in range(r1 + 1, r2 + 1):
             changes.update(self._paste_changes(clip, r, c1, False))
@@ -282,6 +293,7 @@ class Sheet:
         """Copy the left column of the rectangle into the columns to its right."""
         r1, r2, c1, c2 = min(r1, r2), max(r1, r2), min(c1, c2), max(c1, c2)
         clip = self.copy(r1, c1, r2, c1)
+        _check_write_size(max(len(clip.cells), 1) * (c2 - c1))
         changes: dict[Pos, Cell | None] = {}
         for c in range(c1 + 1, c2 + 1):
             changes.update(self._paste_changes(clip, r1, c, False))

@@ -27,6 +27,7 @@ SAFE_OPS = [
     "copy",
     "paste",
     "paste_text",
+    "fill",
     "undo",
     "redo",
     "new",
@@ -51,6 +52,8 @@ ARG_NAMES = [
 ]
 
 scalars = st.one_of(
+    st.sampled_from(["down", "right", "display", "raw", "0.00"]),
+    st.integers(min_value=-5, max_value=2_000_000),
     st.none(),
     st.booleans(),
     st.integers(min_value=-(2**70), max_value=2**70),

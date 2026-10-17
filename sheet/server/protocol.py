@@ -20,6 +20,7 @@ from sheet.engine.files import FileFormatError, load_sheet, save_sheet
 from sheet.engine.formats import FormatError, format_value
 from sheet.engine.graph import CycleError
 from sheet.engine.lexer import FormulaSyntaxError
+from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.sheet import Clipboard, Pos, Sheet
 from sheet.engine.values import ErrorValue
@@ -323,7 +324,14 @@ class Session:
 
     def _paste_text(self, request: Request) -> Response:
         row, col = _pos(request, "at")
-        text = _text(request, "text").replace("\r\n", "\n").replace("\r", "\n")
+        text = _text(request, "text")
+        entries_upper_bound = text.count("\t") + text.count("\n") + text.count("\r") + 1
+        if entries_upper_bound > MAX_WRITE_CELLS:  # refuse before splitting a huge string
+            raise _invalid(
+                f"Too many cells: this would write about {entries_upper_bound:,}, and the limit "
+                f"is {MAX_WRITE_CELLS:,} cells"
+            )
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()

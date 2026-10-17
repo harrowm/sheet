@@ -530,3 +530,16 @@ def test_the_window_tells_the_user_when_a_change_cannot_be_undone(win, wait_unti
         "That change was too large to keep in the undo history, so it cannot be undone"
     )
     assert "cannot be undone" in win.status_text() and not win.status_is_error()
+
+
+def test_select_all_then_fill_down_is_refused_with_a_clear_message_at_once(win, put, wait_until):
+    put(("A1", "=B1+1"))
+    win.view.selectAll()
+    import time
+
+    start = time.monotonic()
+    win.fill_down()
+    wait_until(lambda: win.status_is_error() and "limit" in win.status_text())
+    assert "250,000" in win.status_text()
+    assert time.monotonic() - start < 5  # it used to take ~24 seconds and create a million cells
+    assert win.client.alive
