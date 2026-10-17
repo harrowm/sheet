@@ -5,7 +5,7 @@ Grammar (lowest to highest precedence):
     concat     := additive ("&" additive)*
     additive   := term (("+" | "-") term)*
     term       := power (("*" | "/") power)*
-    power      := unary ("^" power)?          right-associative
+    power      := unary ("^" unary)*          left-associative, as in Excel: 2^3^2 is 64
     unary      := ("-" | "+") unary | postfix  binds tighter than ^, as in Excel
     postfix    := primary "%"*
     primary    := NUMBER | STRING | BOOL | ERROR | ref [":" ref] | IDENT "(" [args] ")" | "(" comparison ")"
@@ -126,9 +126,9 @@ class _Parser:
 
     def _power(self) -> Node:
         node = self._unary()
-        if self._at_op("^"):
+        while self._at_op("^"):
             self._next()
-            return BinaryOp("^", node, self._power())
+            node = BinaryOp("^", node, self._unary())
         return node
 
     def _unary(self) -> Node:

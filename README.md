@@ -3,7 +3,7 @@
 [![tests](https://github.com/harrowm/sheet/actions/workflows/tests.yml/badge.svg)](https://github.com/harrowm/sheet/actions/workflows/tests.yml)
 ![test count](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/harrowm/sheet/badges/tests.json)
 
-A spreadsheet with a parallel recalculation engine. See [specv2.md](specv2.md) for the design.
+A spreadsheet with a parallel recalculation engine. Supported platforms: macOS and Linux (Windows is untested). See [specv2.md](specv2.md) for the design.
 
 - **Engine** (free-threaded Python 3.14t): formulas, ranges, dates and formats, dependency graph
   with cycle rollback, undo/redo, row/column insert and delete, copy/paste/fill, CSV, and parallel

@@ -69,9 +69,7 @@ def _render(node: Node) -> tuple[str, int]:
             return _wrap(operand, _POSTFIX_LEVEL) + "%", _POSTFIX_LEVEL
         case UnaryOp(op, operand):
             return op + _wrap(operand, _PREFIX_LEVEL), _PREFIX_LEVEL
-        case BinaryOp("^", left, right):  # right-associative; unary binds tighter on the left
-            return f"{_wrap(left, _PREFIX_LEVEL)}^{_wrap(right, 5)}", 5
-        case BinaryOp(op, left, right):  # the rest are left-associative
+        case BinaryOp(op, left, right):  # all binary operators are left-associative
             level = _BINARY_LEVEL[op]
             return f"{_wrap(left, level)}{op}{_wrap(right, level + 1)}", level
         case FuncCall(name, args):

@@ -34,24 +34,24 @@ Implementation order (each step is complete, tested and working before the next)
 3. Dependency graph with cycle detection and rollback.
 4. Transactions, undo/redo, structural edits, copy/paste.
 5. Parallel recalculation and benchmarks.
-6. CSV I/O.
+6. CSV I/O. **[Superseded by entry 137: `^` is now left-associative, as in Excel.]**
 7. PyQt6 UI.
 
 ## 3. Project setup and tooling
 
-- Managed with **uv**. `pyproject.toml` pins Python `3.14t` (`uv python install 3.14t`).
-- `scripts/setup.sh`: installs the free-threaded Python, creates the venv and syncs dependencies.
-- `scripts/run.sh`: starts the spreadsheet application.
-- `scripts/test.sh`: runs the full test suite and exits non-zero on any failure.
-- Tools: `pytest`, `hypothesis` (property tests for parser, graph and date logic), `pytest-benchmark` or a custom harness, `ruff` (lint and format), `mypy` or `pyright` (type checking).
-- **Early spike (before step 1):** confirm that PyQt6 installs and runs on 3.14t and that importing it does not silently re-enable the GIL (check `sys._is_gil_enabled()`). If it does, document the consequence. The engine must still be benchmarked GIL-free in isolation (headless, no Qt import).
+- Managed with **uv**. Two environments are created from the one `pyproject.toml`: `.venv`, free-threaded Python **3.14t**, for the engine, its tests and the benchmarks; and `.venv-ui`, standard Python 3.14 with PyQt6, for the UI (PyQt6 has no free-threaded wheel; see section 16, entries 99-105).
+- `scripts/setup.sh` installs both; `scripts/ui_python.sh` finds (or installs) the standard Python 3.14 for the UI; `scripts/run.sh` starts the application (the UI starts the engine process itself); `scripts/test.sh [engine|ui]` runs the tests and exits non-zero on any failure; `scripts/bench.sh` runs the parallel-recalculation benchmarks.
+- Tools: `pytest`, `hypothesis` (property tests and fuzzing), a small custom benchmark harness, `ruff` (lint and format) and `mypy --strict`.
+- **Supported platforms: macOS and Linux** (both tested: macOS locally, Ubuntu in CI). Windows is not supported or tested, and the scripts are bash.
+- The early spike result: PyQt6 does not install on 3.14t, so the UI runs in its own interpreter and the engine in a separate free-threaded process.
 
 ## 4. Testing and CI
 
 - **Test first:** for each feature, write failing tests, then implement until they pass.
 - Test layers: unit (lexer/parser/evaluator/dates/formats), property-based (hypothesis), integration (engine end-to-end), UI (offscreen Qt), benchmarks.
-- **GitHub Actions** workflow runs on every push and pull request: install uv, install 3.14t, run `scripts/test.sh` with `QT_QPA_PLATFORM=offscreen`.
-- The README shows a CI status badge (pass/fail). A test count is also shown: CI writes the pytest JUnit summary (tests run / passed / failed) into a badge JSON (for example via a gist and a shields.io endpoint badge), updated on pushes to `main`.
+- **GitHub Actions** runs on every push to `main` and every pull request (Ubuntu): both environments are installed from scratch, `ruff` and `mypy` run for engine and UI, then the engine tests (3.14t) and the UI tests (standard 3.14, offscreen Qt, against a real engine process) run as separate steps. Timing benchmarks run locally only.
+- The README shows a CI status badge and a test-count badge: CI converts the JUnit reports into a shields.io endpoint file on a `badges` branch (no secrets needed; public repositories only).
+- **Fuzzing is part of the suite**: random bytes through the server loop, random garbage and random valid command sequences through the request handler (checking that failed requests change nothing and the graph always matches the formulas).
 
 ## 5. Grid and cell store
 
@@ -80,9 +80,9 @@ Rules:
 ## 6. Formula language
 
 - **Parsing:** hand-written lexer and **recursive-descent parser**. Lexing, parsing and AST construction happen **once, on data entry**. Recalculation walks the stored AST and never re-parses.
-- **Operators (high to low precedence):** unary `-` `+`; `%` postfix; `^` (right-associative); `*` `/`; `+` `-`; `&` (string concat); comparisons `= <> < > <= >=`. Parentheses are supported.
+- **Operators (high to low precedence):** unary `-` `+`; `%` postfix; `^` (left-associative, as in Excel: `=2^3^2` is 64); `*` `/`; `+` `-`; `&` (string concat); comparisons `= <> < > <= >=`. Parentheses are supported.
 - **Literals:** numbers (including `1.5e3`), strings in double quotes (`""` escapes a quote), `TRUE` / `FALSE`.
-- **References:** `A1`, `$A$1`, `$A1`, `A$1` (case-insensitive); ranges `A1:A45`. Whole-column and whole-row ranges (`A:A`, `1:1`) are supported and resolve to populated cells only.
+- **References:** `A1`, `$A$1`, `$A1`, `A$1` (case-insensitive); ranges `A1:A45`. Whole-column and whole-row ranges (`A:A`, `1:1`) are **not** supported (removed from the spec; use an explicit range such as `A1:A1048576`).
 - **Functions (v1):** `SUM`, `AVERAGE`, `MAX`, `MIN`, `COUNT`. Others may be added through a function registry.
 - **Semantics:**
   - Range functions ignore empty cells, text and booleans inside ranges; they error on error values.
@@ -90,6 +90,8 @@ Rules:
   - Directly referenced empty cells are `0` in arithmetic and `""` in concatenation.
   - Text that cannot be converted to a number in arithmetic gives `#VALUE!`; `TRUE`/`FALSE` coerce to 1/0 in arithmetic.
   - Unknown function names give `#NAME?`.
+  - Number-like text converts in arithmetic only if it is plain ASCII decimal (`"5"`, `" 1e2 "`); `"inf"`, `"1_0"`, `"0x10"` and non-ASCII digits give `#VALUE!`. A number outside the float range typed into a cell stays text; in a formula it is a syntax error. Arithmetic or `SUM`/`AVERAGE` overflow gives `#NUM!`. Negative zero never appears.
+  - Limits (Excel's own): a formula is at most 8,192 characters and 64 levels of nested parentheses and function calls, with clear error messages when exceeded.
   - Syntax errors are rejected at entry: the edit is not applied and the user gets a message (the previous cell content is kept).
 
 ## 7. Dates and formats
@@ -109,7 +111,7 @@ Rules:
 - **Kahn's algorithm** performs the topological sort and detects cycles in one pass (nodes left unprocessed indicate a cycle).
 - **Localised Kahn:** on a change, collect only the cells reachable downstream via `dependents` from the changed cell(s), then run Kahn on that subgraph only.
 - **Range dependencies:** ranges are stored as range nodes, not one edge per cell, so that `A1:A1000000` costs O(1) edges. A change at `(r, c)` finds the range nodes covering it via an index (for example, per-column interval lists). Only populated cells are iterated when a range is evaluated.
-- **Atomic edits with rollback:** setting a cell's formula builds the new dependency edges speculatively, runs the cycle check on the affected subgraph, and either commits or restores the previous edges, text, AST and values exactly. A rejected edit shows the user a `#CIRC!` message and leaves the sheet unchanged. Self-reference (`A1 = A1+1`) is covered explicitly.
+- **Atomic edits with rollback:** setting a cell's formula builds the new dependency edges speculatively, runs the cycle check on the affected subgraph, and either commits or restores the previous edges, text, AST and values exactly. A rejected edit tells the user it would create a circular reference and leaves the sheet unchanged (the `#CIRC!` error value exists but is never stored). Self-reference (`A1 = A1+1`) is covered explicitly.
 
 ## 9. Parallel recalculation
 
@@ -122,24 +124,24 @@ Rules:
 
 ## 10. Threading and edit model
 
-- The Qt GUI thread is the only thread that touches Qt objects. Engine worker threads never call the Qt model; they report completion via Qt signals.
-- Edits come from the GUI thread and are placed on an **edit queue**. A single engine coordinator processes edits one at a time and each edit is one transaction: parse, speculative graph update, cycle check, commit or rollback, recalculate.
-- **Edits made during a recalculation are queued until it finishes** and are then applied in order. The UI stays responsive because entering text only enqueues work, and the display shows a "calculating" indicator.
-- Graph and cell-store mutation is guarded by a **read/write lock** (written for this project, since the standard library has none; writers are preferred to avoid starvation). Recalculation workers take the read side; the coordinator takes the write side for structural changes.
-- Readers (the UI model's `data()` calls) read committed values and are never blocked for long: they see the last completed state until the new values are published.
+- The engine is a **separate process** (section 14). It handles **one request at a time**, in order, from a single loop; each edit is one transaction (parse, update graph, cycle check, commit or roll back, recalculate). Edits sent while a recalculation runs simply wait their turn in the pipe, and the UI shows a "Calculating..." indicator if a request takes more than 150 ms.
+- Only the Qt GUI thread touches Qt objects, in the UI process. The engine's worker threads never see Qt; they are used only for recalculation.
+- **No read/write lock is used, by decision** (the original spec asked for one). Mutation of the graph and cell store happens only on the engine's single request thread, while recalculation workers run only when that thread is blocked waiting for them; workers read other cells (finished earlier in the plan, or unchanged) and write only their own cell. So nothing mutates the structures concurrently, and a lock would protect against nothing. This was checked empirically: 200 random graphs of 300-1,500 cells and 300 repeated runs gave identical results sequentially and with 6-8 threads. If the engine ever gets more than one caller thread, a lock must be added at that point.
+- Readers never block the engine: the UI model asks for blocks of cells and shows the last data it has until a fresh block arrives.
 
 ## 11. Transactions, undo and redo
 
 - Every user action (edit, format change, paste, fill, row/column insert/delete) is a single **transaction** recorded as a reversible set of cell changes (text, AST, value, format and graph edges).
 - The same mechanism provides cycle rollback (section 8) and **undo/redo**: undo applies the inverse change set and recalculates the affected subgraph; redo reapplies it.
-- Undo history depth is configurable (default 100). A new action after an undo clears the redo stack.
+- Undo history is bounded two ways: 100 steps and 1,000,000 changed cells in total (oldest steps are dropped first). A single change larger than that is applied but cannot be undone, which clears the older history and tells the user. A new action after an undo clears the redo stack.
 
 ## 12. Structural edits, copy/paste and fill
 
 - **Insert/delete rows and columns:** cell keys shift and every formula reference is adjusted (references to deleted cells become `#REF!`; ranges shrink or grow as in Excel). The graph is rebuilt for the affected cells as one transaction. Limits: operations that would push cells beyond the grid bounds are rejected.
 - **Copy/paste:** formulas are copied with relative references adjusted by the paste offset (absolute `$` parts are not). Pasting a range is a single transaction. Values-only paste is supported.
 - **Fill-down / fill-right:** same adjustment rules as copy/paste.
-- Reference adjustment is performed on the AST (not by re-lexing text), then the `text` is regenerated from the AST.
+- Reference adjustment is performed on the parse tree, and the `text` is regenerated from it (re-parsed from the unfolded formula, because the stored AST has constants folded away; entry 67). Cut/move is not implemented.
+- Fill, paste and paste-from-text write at most 250,000 cells in one operation; larger ones are refused with a message (an accidental select-all would otherwise freeze the engine). Formatting is capped at 1,000,000 cells.
 
 ## 13. CSV import/export
 
@@ -149,11 +151,12 @@ Rules:
 
 ## 14. User interface (PyQt6)
 
-- `QTableView` with a `QAbstractTableModel` subclass over the engine. The model reports the full 1,048,576 x 16,384 size; Qt's view virtualisation means only visible cells are requested.
-- Formula bar showing the selected cell's raw `text`; cell editing sends the edit to the engine queue.
-- Selection, copy/paste, fill (keyboard and drag handle), undo/redo (Ctrl+Z / Ctrl+Y), a format menu for the selection, row/column insert/delete in the context menu, column header letters and row numbers.
-- Open/save CSV through standard dialogs.
-- Display text comes from `value` plus `format`; errors display their code (`#DIV/0!`). Numbers are right-aligned, text left-aligned, booleans centred.
+- The UI runs in its own process (standard Python 3.14 + PyQt6) and starts the engine as a subprocess, talking to it with one JSON object per line over the engine's stdin/stdout (`sheet/server/protocol.py`). The engine never dies because of what arrives: every line gets a typed reply.
+- `QTableView` with a `QAbstractTableModel` over the full 1,048,576 x 16,384 grid. `data()` never blocks: it answers from a cache of 64 x 16-cell blocks and requests missing blocks asynchronously.
+- Name box, formula bar (Enter commits, Escape abandons), in-cell editing with Enter moving down, selection, copy/paste (formula-aware inside the app, tab-separated text outside), paste values, clear, fill down/right, undo/redo, nine format presets plus a custom format, row/column insert/delete, context menus, status bar (messages, engine mode, "Calculating...").
+- Files: New, Open, Save, Save As for the native `.sheet` format (versioned JSON, atomic save), with a modified marker and a confirmation before unsaved changes are discarded; CSV import and export are separate.
+- Display text comes from `value` plus `format`; errors display their code. Numbers are right-aligned, text left, booleans centred, errors red.
+- Robustness: a global exception hook reports an unexpected error in the status bar instead of letting PyQt6 abort the process; the row and column headers do not track the selection (otherwise select-all froze the window for ~15 s).
 
 ## 15. Required test coverage (minimum)
 
@@ -167,7 +170,8 @@ Rules:
 - Transactions: undo/redo round trips, including formats and structural edits.
 - Structural edits and copy/paste: reference adjustment, `#REF!` generation, relative versus absolute.
 - CSV: round trips, quoting, formulas and dates on import.
-- UI (offscreen): model size and `data()` output, edit round trip, queued edit during recalculation.
+- UI (offscreen, against a real engine process): model size and `data()` output, edit round trip, queued edit during recalculation, every dialog path with scripted answers, the exception hook, and the application entry point.
+- Robustness: fuzzing of the server loop and request handler; limits on formula size, nesting and operation size; numeric extremes (overflow, out-of-range numbers, negative zero); file permissions and symlinks on save.
 
 ## 16. Design decisions and issues found during implementation
 
@@ -181,12 +185,12 @@ A running log of decisions made and issues discovered while building. Newest ent
 ### Lexer and parser
 4. **A reference-shaped word followed by `(` is a function name.** `LOG10(` matches the cell-reference pattern (`LOG10` is a valid column and row), so the lexer uses a negative lookahead and treats it as an identifier. Consequence: a function can never be named like a cell reference without parentheses ambiguity, and a reference directly followed by `(` is a syntax error.
 5. **Reference bounds are checked in the parser, not the lexer.** `XFE1` and `A1048577` lex as references but are rejected with a syntax error.
-6. **Unary minus binds tighter than `^`, as in Excel**: `=-2^2` is 4. `^` is right-associative (`=2^3^2` is 512), which differs from Excel (left-associative, giving 64). The spec and tests chose right-associative; this is a deliberate deviation from Excel and should be revisited if Excel fidelity matters.
+6. **Unary minus binds tighter than `^`, as in Excel**: `=-2^2` is 4. `^` is right-associative (`=2^3^2` is 512), which differs from Excel (left-associative, giving 64). The spec and tests chose right-associative; this is a deliberate deviation from Excel and should be revisited if Excel fidelity matters. **[Superseded by entry 137: `^` is now left-associative, as in Excel.]**
 7. **Ranges are normalised** so that `start` is the top-left and `end` the bottom-right (`B2:A1` becomes `A1:B2`), with `$` flags following their coordinate.
 8. **Function names are upper-cased at parse time;** unknown names are only detected at evaluation (`#NAME?`), not at entry.
 9. **Syntax errors are positional:** `FormulaSyntaxError` carries the character position, offset by 1 for the leading `=`.
 10. **Numbers are always floats** in the AST (including integer literals) so there is a single numeric type through the engine.
-11. **Whole-column and whole-row ranges (`A:A`, `1:1`) are specified (section 6) but not yet implemented in the lexer and parser.** To be added with the range dependency work.
+11. **Whole-column and whole-row ranges (`A:A`, `1:1`) are specified (section 6) but not yet implemented in the lexer and parser.** To be added with the range dependency work. **[Resolved by entry 137: whole-column and whole-row ranges were removed from the spec.]**
 
 ### Evaluator and constant folding
 12. **Folding evaluates against an empty reader** (`NO_CELLS`). Any sub-tree with only literals, including function calls such as `SUM(1,2)` and unknown functions, is replaced by a `Literal`. A constant error is folded into an error literal, so `=1/0` is `Literal(#DIV/0!)` and is never re-evaluated.
@@ -199,7 +203,7 @@ A running log of decisions made and issues discovered while building. Newest ent
 19. **`SUM` uses `math.fsum`** for accurate floating-point summation; results may differ in the last digit from a naive left-to-right sum, and from Excel.
 20. **A bare range outside a function** (`=A1:A3`) evaluates to `#VALUE!`. Excel's dynamic-array spilling is out of scope.
 21. **The evaluator reads cells through a `CellReader` protocol** (`get`, `range_values`) rather than a concrete store, so it can be tested with a fake and the real store plugs in later. `range_values` must return only populated cells, which is what makes huge ranges cheap.
-22. **Recursion depth:** parsing and evaluation are recursive, so extremely deeply nested formulas could hit Python's recursion limit. A maximum nesting depth (with a syntax error beyond it) should be added.
+22. **Recursion depth:** parsing and evaluation are recursive, so extremely deeply nested formulas could hit Python's recursion limit. A maximum nesting depth (with a syntax error beyond it) should be added. **[Resolved by entry 131: Excel's limits are enforced with clear messages and the recursion limit was raised.]**
 
 ### Dates and formats
 23. **`make_serial` / `split_serial` return and accept floats**, and the fake `29 Feb 1900` (serial 60) is accepted on entry and displayed, but a real calendar has no such day, so `split_serial(60)` is special-cased. Dates before 1 Jan 1900 are rejected; serial 0 ("0 Jan 1900" in Excel) is not supported.
@@ -331,3 +335,19 @@ A running log of decisions made and issues discovered while building. Newest ent
 123. **Bug found by the round-trip property test:** formatting an empty cell as `General` stored a useless empty cell with text `""` and format `General`, which is the same as no cell. It is harmless on screen but made a saved-and-reloaded sheet differ from the original. `CellStore.formatted_cells` now returns "remove" for an empty cell left with the General format.
 124. **Protocol and UI.** New requests `save`, `load` and `new`; `load` and `new` return `reset: true`, which makes the table model drop its entire block cache (old cells that no longer exist cannot be found by bounds). File errors use the kind `file`. The window has File > New, Open, Save, Save As (Ctrl+N/O/S/Shift+S), a title with the file name and a `*` when the engine's version differs from the version at the last save or load, a confirmation before New, Open or closing discards changes (Save, Discard or Cancel; Save runs a local event loop until the engine answers), and `.sheet` added to a name typed without an extension. CSV moved to Import and Export entries and is not a document: exporting does not change the file name or clear the `*`.
 125. **Limits.** "Modified" compares engine versions, so editing and then undoing back to the saved content still shows `*` (a content hash would fix that). Column widths and the cursor position are not saved. There is no autosave, recent-files list or file locking, and two programs saving the same file at once is not detected. The shared name helpers (`column_name`, `cell_name`) now exist in three places (`engine/address.py`, `engine/csv_io.py`, `ui/names.py`) and should be merged.
+
+### Hardening review (bugs found by probing and fixed)
+126. **Method.** A review of the whole project: every stated limit in this log, about 30 adversarial probes run against the real code in isolated subprocesses (numeric extremes, deep nesting, hostile protocol input, huge operations, file handling), a stress comparison of sequential and parallel recalculation on large random graphs, test coverage (96% engine, 89% UI), and a dead-code scan. Probes and fixes are listed below; each fix has a regression test.
+127. **The server could be killed by its input.** The first malformed line crashed it with an `UnboundLocalError` (a latent bug the tests missed because a valid request had always come first and left a stale variable), and invalid UTF-8, deeply nested JSON and a 6,000-digit integer all killed it too. Now every non-blank line gets exactly one reply, `NaN`/`Infinity` are refused as non-standard JSON, a request `id` may only be an integer or a short string (an arbitrary `id` was echoed back and could produce invalid JSON), a closed stdout ends the loop quietly, and `sys.stdout` is restored. Fuzz tests feed random bytes to the loop and random garbage and random valid command sequences to the handler.
+128. **Numbers outside the float range and overflow.** Typing `1e999` stored infinity, after which any numeric format made every view of that block fail with an internal error, `SUM` of an infinity and its negative failed, and inserting a row failed for any formula containing `1e999`. Now such a number typed into a cell stays text, in a formula it is a syntax error, and `SUM`/`AVERAGE` overflow (`=SUM(1e308,1e308)`) gives `#NUM!` instead of an exception (which had also rejected unrelated edits whose recalculation overflowed). Number-like text converts only if it is plain ASCII decimal, so `"inf"`, `"nan"`, `"1_0"`, `"0x10"` and non-ASCII digits are `#VALUE!` in arithmetic and text on entry (the lexer is ASCII-only too). `format_value` returns `#NUM!` for a non-finite value as a last line of defence.
+129. **Saved files lost their permissions.** The temporary file came from `mkstemp` (mode 0600), so every save forced 0600 even over a 0664 file, and saving through a symlink replaced the link. Now the temporary file is created with 0666 so the umask decides a new file's mode, an existing file's mode is kept, and a symlink is resolved so the real file is replaced.
+130. **Undo history had no memory bound.** 100 edits that each recalculated 30,000 formulas grew the process from 86 MB to 761 MB. The history is now also capped at 1,000,000 changed cells (329 MB for the same scenario); see section 11.
+131. **Formula limits.** Formulas reached only 983 terms in a sum, 81 nested parentheses and 74 nested functions, then failed with a raw `RecursionError` reported as an internal error. Now the limits are Excel's (8,192 characters, 64 levels, enforced in the parser with clear messages), the recursion limit is raised to 30,000 once (checked safe: 4,000-term formulas work on small-stack worker threads, and extreme depth still produces a Python `RecursionError` rather than a crash), left-associative chains reach 4,094 terms, and any recursion error that still escapes is reported as a formula problem. Length is checked on what the user types, not on text the program regenerates when it rewrites references (which can lengthen a formula). A deeply nested JSON file is a file error. A 20,000-argument `SUM` is now refused (it exceeds 8,192 characters).
+132. **Operations that could freeze the engine.** Select-all then fill-down wrote 1,048,576 formulas in 24 s. Fill, paste and paste-from-text are now limited to 250,000 written cells (about six seconds worst case), refused instantly with a clear message and no change; a huge pasted string is rejected before it is split. Explicit file operations (CSV import, loading a file) are not capped; their cost scales with the file. Inserting or deleting rows still takes about 5 s on a 400,000-cell sheet (it rewrites every cell) and has no cap or cancel.
+133. **The UI froze for 15 s on Ctrl+A.** Found by a failing test: Qt's row and column headers, which share the grid's selection model, asked it about every row and column of a selection to highlight it, 1,048,576 x 16,384 for select-all (14.6 s; 1.4 s for one column). Overriding `visualRegionForSelection` did not help (measured), but giving each header a private selection model made select-all instant (0.01 s) while header clicks still select whole rows and columns. Selected headers are no longer shown in bold.
+134. **Qt aborts the process on any unhandled slot exception, and my own tests were crashing Python.** Measured: an exception escaping a slot ends the process with `SIGABRT` (exit 134) unless `sys.excepthook` is replaced. The application now installs a hook that logs the traceback and shows "Unexpected error" in the status bar. The test proving the abort ran a deliberately crashing subprocess on every UI test run, and macOS logged each as a crash report with a "Python quit unexpectedly" popup (14 reports in a day); that half of the test was removed. Lesson: never crash a subprocess on purpose in a test that runs routinely.
+135. **Display fixes.** `General` shows integers up to 11 digits in full as Excel does (12345678901 had shown as `1.23456789e+10`; larger ones stay scientific), negative zero never appears (`=-A1` with `A1` empty showed `-0`; zero results are normalised where they are produced, at entry and in the display), and numbers of 1e21 or more under a numeric format show in scientific notation instead of 300-digit strings.
+136. **Dialogs and entry point are now tested.** Every modal prompt is a small overridable method (unsaved-changes question, file choosers, text prompt, warnings), so tests script the answers: Save/Discard/Cancel on New, Open and close, save with and without a path, a failed save, the engine dying mid-save (a 60 s ceiling guards the local event loop), every file dialog, custom formats, and the entry point (`create_window`, a real application run that leaves no engine process behind).
+137. **Decisions taken in this review.** (a) Whole-column/row ranges (`A:A`) are removed from the spec rather than built. (b) No read/write lock: the single-threaded request loop makes it unnecessary (section 10). (c) `^` is now left-associative like Excel (`=2^3^2` is 64), superseding entry 6 and a deliberate early choice; the renderer's parenthesising and the round-trip property test were updated with it. (d) macOS and Linux are the supported platforms; Windows is untested.
+138. **Verified solid.** Parallel recalculation matched sequential exactly in 200 large random graphs (300-1,500 cells with ranges) and 300 repeated runs on 8 threads; comparisons involving empty cells behave as in Excel; the engine returned typed errors for 16 malformed argument shapes; a 30,000-cell dependency chain, a 50 MB text cell and a 20 MB request line all work; `uv.lock` is committed.
+139. **Still open.** Structural edits on very large sheets are slow and uncancellable (entry 132); the engine has no per-request time limit or cancel, so a pathological formula set could keep the UI in "Calculating..." indefinitely; four engine tests assert wall-clock limits and the UI test waits are 6 s, which could flake on a very slow machine; dead or duplicate code remains (`Shape` in the benchmarks, `CellStore.set_format`/`set_format_range`, `is_date_format`, `graph.set_dependencies` and `range_count`, `ErrorKind.CIRC`, and the column-name helper in three places).

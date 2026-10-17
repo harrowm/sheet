@@ -83,6 +83,8 @@ def test_error_literals_evaluate_and_propagate():
         "=1-(2-3)",
         "=2^3^2",
         "=(2^3)^2",
+        "=2^(3^2)",
+        "=2^-3",
         "=-2^2",
         "=-(2^2)",
         "=(-2)%",
@@ -115,6 +117,10 @@ def test_render_uses_minimal_parentheses():
     assert rt("=(1+2)+3") == "1+2+3"
     assert rt("=1+(2*3)") == "1+2*3"
     assert rt("=(1+2)*3") == "(1+2)*3"
+    assert rt("=(2^3)^2") == "2^3^2"  # left-associative: these parentheses are redundant
+    assert rt("=2^(3^2)") == "2^(3^2)"  # these are not
+    assert rt("=2^(-3)") == "2^-3"
+    assert rt("=(2*3)^2") == "(2*3)^2"
     assert rt("=(A1)") == "A1"
     assert rt("=  a1 + sum( b2:a1 )") == "A1+SUM(A1:B2)"
 

@@ -24,8 +24,17 @@ def test_left_associative_subtraction():
     )
 
 
-def test_power_is_right_associative():
-    assert parse("=2^3^2") == BinaryOp("^", Literal(2.0), BinaryOp("^", Literal(3.0), Literal(2.0)))
+def test_power_is_left_associative_as_in_excel():
+    assert parse("=2^3^2") == BinaryOp("^", BinaryOp("^", Literal(2.0), Literal(3.0)), Literal(2.0))
+    assert parse("=2^(3^2)") == BinaryOp(
+        "^", Literal(2.0), BinaryOp("^", Literal(3.0), Literal(2.0))
+    )
+
+
+def test_power_binds_tighter_than_multiplication_and_takes_a_signed_exponent():
+    assert parse("=2^3*4") == BinaryOp("*", BinaryOp("^", Literal(2.0), Literal(3.0)), Literal(4.0))
+    assert parse("=2^-3") == BinaryOp("^", Literal(2.0), UnaryOp("-", Literal(3.0)))
+    assert parse("=2^3%") == BinaryOp("^", Literal(2.0), UnaryOp("%", Literal(3.0)))
 
 
 def test_unary_minus_binds_tighter_than_power_as_in_excel():
