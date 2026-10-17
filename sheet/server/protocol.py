@@ -172,6 +172,14 @@ class Session:
             response = {"ok": False, "error": {"kind": exc.kind, "message": str(exc), **exc.extra}}
         except FormulaSyntaxError as exc:
             response = {"ok": False, "error": {"kind": "syntax", "message": str(exc)}}
+        except RecursionError:
+            response = {
+                "ok": False,
+                "error": {
+                    "kind": "syntax",
+                    "message": "The formula is too deeply nested to process",
+                },
+            }
         except CycleError as exc:
             response = {"ok": False, "error": {"kind": "circular", "message": str(exc)}}
         except CsvError as exc:

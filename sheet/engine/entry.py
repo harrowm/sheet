@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from sheet.engine.ast import Literal, Node
 from sheet.engine.compiler import compile_formula
 from sheet.engine.dates import parse_date_text
+from sheet.engine.lexer import FormulaSyntaxError
+from sheet.engine.limits import MAX_FORMULA_LENGTH
 from sheet.engine.values import Value
 
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
@@ -22,15 +24,22 @@ class Entry:
     format: str | None  # a format implied by the entry (dates), else None
 
 
-def parse_entry(text: str) -> Entry:
+def parse_entry(text: str, enforce_limits: bool = True) -> Entry:
     """Classify ``text`` as empty, formula, number, boolean, date or string.
 
-    Raises FormulaSyntaxError for a malformed formula, so the edit can be rejected.
+    Raises FormulaSyntaxError for a malformed or over-long formula, so the edit can be
+    rejected. ``enforce_limits=False`` skips the length limit, for text the program itself
+    regenerated (rewriting references can lengthen a formula the user typed within the limit).
     """
     stripped = text.strip()
     if not stripped:
         return Entry(text, None, None, None)
     if stripped.startswith("="):
+        if enforce_limits and len(stripped) > MAX_FORMULA_LENGTH:
+            raise FormulaSyntaxError(
+                f"Formulas can be at most {MAX_FORMULA_LENGTH} characters ({len(stripped)} typed)",
+                0,
+            )
         ast = compile_formula(stripped)
         value = ast.value if isinstance(ast, Literal) else None  # constants are pre-calculated
         return Entry(text, ast, value, None)

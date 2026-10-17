@@ -69,7 +69,7 @@ def _rewritten(cell: Cell, rewrite: Callable[[Node], Node]) -> Cell:
     """
     if cell.ast is None or rewrite(cell.ast) == cell.ast:
         return cell
-    entry = parse_entry("=" + render(rewrite(parse(cell.text.strip()))))
+    entry = parse_entry("=" + render(rewrite(parse(cell.text.strip()))), enforce_limits=False)
     return Cell(entry.text, entry.ast, entry.value, cell.format)
 
 

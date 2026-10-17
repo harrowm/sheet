@@ -96,7 +96,9 @@ def _read(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except RecursionError as exc:
+        raise FileFormatError("not a sheet file (nested too deeply)") from exc
+    except ValueError as exc:  # bad JSON, invalid UTF-8, or an absurdly long integer
         raise FileFormatError(f"not a sheet file ({exc})") from exc
     if not isinstance(data, dict) or data.get("format") != FORMAT_NAME:
         raise FileFormatError("not a sheet file")

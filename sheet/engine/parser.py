@@ -25,7 +25,10 @@ from sheet.engine.ast import (
     normalised_range,
 )
 from sheet.engine.lexer import FormulaSyntaxError, Token, TokenKind, tokenize
+from sheet.engine.limits import MAX_NESTING, ensure_recursion_headroom
 from sheet.engine.values import ErrorKind, ErrorValue
+
+ensure_recursion_headroom()
 
 MAX_ROWS = 1_048_576
 MAX_COLS = 16_384
@@ -69,6 +72,7 @@ class _Parser:
         self._tokens = tokens
         self._i = 0
         self._offset = offset
+        self._depth = 0  # current nesting of parentheses and function calls
 
     def parse(self) -> Node:
         node = self._comparison()
@@ -83,6 +87,11 @@ class _Parser:
         tok = self._tokens[self._i]
         self._i += 1
         return tok
+
+    def _descend(self) -> None:
+        self._depth += 1
+        if self._depth > MAX_NESTING:
+            self._fail(f"Formulas can be nested at most {MAX_NESTING} levels deep")
 
     def _fail(self, message: str) -> None:
         raise FormulaSyntaxError(message, self._peek().pos + self._offset)
@@ -151,8 +160,10 @@ class _Parser:
                 return self._function()
             case TokenKind.LPAREN:
                 self._next()
+                self._descend()
                 node = self._comparison()
                 self._expect(TokenKind.RPAREN, "')'")
+                self._depth -= 1
                 return node
             case _:
                 self._fail("Unexpected token")
@@ -173,6 +184,7 @@ class _Parser:
     def _function(self) -> Node:
         name = str(self._next().value).upper()
         self._expect(TokenKind.LPAREN, "'(' after function name")
+        self._descend()
         args: list[Node] = []
         if self._peek().kind is not TokenKind.RPAREN:
             args.append(self._comparison())
@@ -180,4 +192,5 @@ class _Parser:
                 self._next()
                 args.append(self._comparison())
         self._expect(TokenKind.RPAREN, "')'")
+        self._depth -= 1
         return FuncCall(name, tuple(args))
