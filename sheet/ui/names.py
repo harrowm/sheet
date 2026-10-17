@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-from sheet.engine.address import cell_name, column_name  # noqa: F401 - re-exported for the UI
+from sheet.engine.address import cell_name, column_name
+
+__all__ = ["MAX_COLS", "MAX_ROWS", "cell_name", "column_name", "parse_cell_name"]
 
 MAX_ROWS = 1_048_576
 MAX_COLS = 16_384
