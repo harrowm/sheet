@@ -102,3 +102,44 @@ def test_invalid_formats(fmt):
         validate_format(fmt)
     with pytest.raises(FormatError):
         format_value(1.0, fmt)
+
+
+# --- General display of large integers, negative zero, and huge numbers ------------------------------
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (12345678901.0, "12345678901"),  # 11 digits: shown in full, as Excel does
+        (99999999999.0, "99999999999"),
+        (-12345678901.0, "-12345678901"),
+        (4155551234.0, "4155551234"),
+        (100000000000.0, "1e+11"),  # 12 digits: scientific
+        (4155551234567.0, "4.155551235e+12"),
+        (0.1 + 0.2, "0.3"),
+        (1234567.891234567, "1234567.891"),
+        (0.0, "0"),
+        (-0.0, "0"),
+    ],
+)
+def test_general_shows_integers_up_to_eleven_digits_in_full_and_never_negative_zero(
+    value, expected
+):
+    assert format_value(value, "General") == expected
+
+
+def test_numeric_formats_never_show_negative_zero():
+    for fmt in ("0.00", "#,##0", "0%", "$#,##0.00"):
+        assert not format_value(-0.0, fmt).startswith("-"), fmt
+
+
+@pytest.mark.parametrize("fmt", ["0.00", "#,##0.00", "0.0%", "$#,##0", "0"])
+def test_enormous_numbers_do_not_produce_enormous_strings(fmt):
+    for value in (1e21, 1e100, 1e308, -1e308):
+        shown = format_value(value, fmt)
+        assert len(shown) <= 16 and "E+" in shown, (fmt, value, shown)
+
+
+def test_numbers_below_the_cutoff_keep_their_full_numeric_format():
+    assert format_value(1e20, "0.00") == "100000000000000000000.00"
+    assert format_value(123456789012345.0, "#,##0") == "123,456,789,012,345"

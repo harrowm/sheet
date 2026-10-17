@@ -108,9 +108,9 @@ def _unary(op: str, v: Value) -> Value:
     if isinstance(n, ErrorValue):
         return n
     if op == "-":
-        return -n
+        return 0.0 - n  # not -n: that would turn 0 into -0
     if op == "%":
-        return n / 100.0
+        return n / 100.0 + 0.0
     return n  # unary plus
 
 
@@ -153,7 +153,7 @@ def _arith(op: str, x: float, y: float) -> Value:
 
 
 def _finite(x: float) -> Value:
-    return x if math.isfinite(x) else _NUM
+    return x + 0.0 if math.isfinite(x) else _NUM  # + 0.0 turns -0.0 into 0.0
 
 
 def _rank(v: Value) -> int:

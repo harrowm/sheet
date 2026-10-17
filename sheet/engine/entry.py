@@ -46,7 +46,7 @@ def parse_entry(text: str, enforce_limits: bool = True) -> Entry:
     if stripped.startswith("'"):
         return Entry(text, None, stripped[1:], None)
     if _NUMBER.fullmatch(stripped) and math.isfinite(number := float(stripped)):
-        return Entry(text, None, number, None)  # (a number beyond float range stays text)
+        return Entry(text, None, number + 0.0, None)  # (beyond float range stays text; -0 is 0)
     if stripped.upper() in ("TRUE", "FALSE"):
         return Entry(text, None, stripped.upper() == "TRUE", None)
     if (date := parse_date_text(stripped)) is not None:

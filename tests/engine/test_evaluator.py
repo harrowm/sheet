@@ -138,3 +138,25 @@ def test_unknown_function_is_name_error():
 def test_power_overflow_is_num_error_and_zero_to_negative_is_div0():
     assert calc("=10^400") == err(ErrorKind.NUM)
     assert calc("=0^-1") == err(ErrorKind.DIV0)
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=-A1",
+        "=0*-1",
+        "=-0",
+        "=0/-5",
+        "=-0*1",
+        "=0%*-1",
+        "=-(0)",
+        "=A1*-1",
+        "=SUM(A1,-0)*-1",
+        "=-A1+A1*0",
+    ],
+)
+def test_arithmetic_never_produces_negative_zero(formula):
+    import math
+
+    value = calc(formula)
+    assert value == 0.0 and math.copysign(1.0, value) == 1.0, (formula, repr(value))

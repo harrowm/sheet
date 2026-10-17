@@ -17,6 +17,7 @@ from sheet.engine.dates import split_serial
 from sheet.engine.values import ErrorValue, Value
 
 GENERAL = "General"
+HUGE = 1e21  # numeric formats show numbers this large in scientific notation
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 _DATE_TOKENS = ("YYYY", "yyyy", "YY", "yy", "MMM", "MM", "DD", "dd", "HH", "hh", "mm", "SS", "ss")
 _LITERAL_CHARS = " $£€-+/():"
@@ -128,6 +129,8 @@ def format_value(value: Value, fmt: str) -> str:
     if isinstance(value, float) and compiled is not None:
         if isinstance(compiled, _Date):
             return _render_date(value, compiled)
+        if abs(value) >= HUGE:
+            return f"{value:.5E}"  # a 300-digit string helps nobody
         return _render_numeric(value, compiled)
     return _general(value)
 
@@ -138,6 +141,10 @@ def _general(value: Value) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, float):
+        if value == 0:
+            return "0"  # also for -0.0
+        if value.is_integer() and abs(value) < 1e11:
+            return str(int(value))  # up to 11 digits in full, as Excel does
         return f"{value:.10g}"
     if isinstance(value, ErrorValue):
         return str(value)
