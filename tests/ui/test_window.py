@@ -543,3 +543,43 @@ def test_select_all_then_fill_down_is_refused_with_a_clear_message_at_once(win, 
     assert "250,000" in win.status_text()
     assert time.monotonic() - start < 5  # it used to take ~24 seconds and create a million cells
     assert win.client.alive
+
+
+def test_selecting_everything_or_a_whole_column_does_not_freeze_the_window(win):
+    import time
+
+    # Qt's headers walked every row of a selection to highlight it: ~15 s for select-all on a
+    # million-row grid and ~1.5 s for one column, until they were given their own selection.
+    for select in (
+        win.view.selectAll,
+        lambda: win.view.selectColumn(3),
+        lambda: win.view.selectRow(5),
+    ):
+        select()
+        start = time.monotonic()
+        QTest.qWait(1)
+        assert time.monotonic() - start < 1.0, select
+
+
+def test_clicking_a_header_still_selects_the_whole_column_or_row(win):
+    from PyQt6.QtCore import QPoint
+
+    hh, vh = win.view.horizontalHeader(), win.view.verticalHeader()
+    QTest.mouseClick(
+        hh.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(hh.sectionViewportPosition(2) + 10, 5)
+    )
+    QTest.qWait(50)
+    assert win.selection_rect() == (0, 2, 1_048_575, 2)
+    QTest.mouseClick(
+        vh.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(5, vh.sectionViewportPosition(4) + 5)
+    )
+    QTest.qWait(50)
+    assert win.selection_rect() == (4, 0, 4, 16_383)
+
+
+def test_selection_still_paints_for_the_visible_cells(win, put, wait_until):
+    put(("A1", "1"), ("B2", "2"))
+    select(win, "A1", "B2")
+    QTest.qWait(50)
+    assert win.selection_rect() == (0, 0, 1, 1)
+    assert not win.grab().isNull()  # painting a selection does not fail

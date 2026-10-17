@@ -9,7 +9,17 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QEventLoop, QModelIndex, QObject, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import (
+    QEvent,
+    QEventLoop,
+    QItemSelectionModel,
+    QModelIndex,
+    QObject,
+    QPoint,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QAction, QCloseEvent, QKeyEvent, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -136,6 +146,7 @@ class MainWindow(QMainWindow):
 
         self.view = QTableView()
         self.view.setModel(self.model)
+        self._decouple_headers()
         self.delegate = CellDelegate(self.view)
         self.view.setItemDelegate(self.delegate)
         self.view.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
@@ -166,6 +177,19 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.engine_label)
         self._message_timer = self._single_shot_timer(MESSAGE_MS, lambda: self.show_message(""))
         self._busy_timer = self._single_shot_timer(BUSY_DELAY_MS, self._show_busy)
+
+    def _decouple_headers(self) -> None:
+        """Stop the row and column headers watching the grid's selection.
+
+        They share the grid's selection model by default and, to bold the headers of selected
+        rows and columns, ask it about every row and column of a selection: on a million-row
+        grid that froze the window for ~15 s on Ctrl+A and ~1.5 s on selecting a column. Each
+        header gets a private, never-used selection model instead. Clicking a header still
+        selects the whole row or column (the grid handles that); selected headers just are
+        not shown in bold.
+        """
+        for header in (self.view.horizontalHeader(), self.view.verticalHeader()):
+            header.setSelectionModel(QItemSelectionModel(self.model, header))
 
     def _single_shot_timer(self, interval_ms: int, slot: Any) -> QTimer:
         timer = QTimer(self)
