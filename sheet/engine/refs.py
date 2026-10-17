@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 
+from sheet.engine.address import column_name
 from sheet.engine.ast import (
     BinaryOp,
     CellRef,
@@ -91,12 +92,7 @@ def _literal(value: float | str | bool | ErrorValue) -> tuple[str, int]:
 
 
 def _cell(ref: CellRef) -> str:
-    letters = ""
-    n = ref.col + 1
-    while n:
-        n, rem = divmod(n - 1, 26)
-        letters = chr(ord("A") + rem) + letters
-    return f"{'$' if ref.abs_col else ''}{letters}{'$' if ref.abs_row else ''}{ref.row + 1}"
+    return f"{'$' if ref.abs_col else ''}{column_name(ref.col)}{'$' if ref.abs_row else ''}{ref.row + 1}"
 
 
 # --- rewriting ---------------------------------------------------------------------------

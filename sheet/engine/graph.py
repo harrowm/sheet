@@ -1,4 +1,4 @@
-"""Cell dependency graph (a DAG) with localised Kahn ordering and atomic edits.
+"""Cell dependency graph (a DAG) with localised Kahn ordering and cycle detection.
 
 Both directions are kept as adjacency lists:
   * dependencies: the cells/ranges a formula reads (what to pull when recalculating);
@@ -99,38 +99,16 @@ class DependencyGraph:
                 out |= self._range_dependents.get(rect, set())
         return out
 
-    def range_count(self) -> int:
-        return len(self._range_dependents)
-
     # --- edits -------------------------------------------------------------------
-
-    def set_dependencies(
-        self, cell: Cell, cells: Iterable[Cell], ranges: Iterable[Rect]
-    ) -> RecalcPlan:
-        """Replace what ``cell`` reads, atomically.
-
-        The new edges are installed speculatively and the downstream subgraph is checked
-        for a cycle. On a cycle the previous edges are restored exactly and CycleError is
-        raised. On success the recalculation plan for ``cell`` is returned.
-        """
-        old_cells = self._cell_deps.get(cell, frozenset())
-        old_ranges = self._range_deps.get(cell, frozenset())
-        self._uninstall(cell)
-        self._install(cell, frozenset(cells), frozenset(ranges))
-        try:
-            return self.plan([cell])
-        except BaseException:
-            self._uninstall(cell)
-            self._install(cell, old_cells, old_ranges)
-            raise
 
     def restore_dependencies(
         self, cell: Cell, cells: Iterable[Cell], ranges: Iterable[Rect]
     ) -> None:
-        """Replace what ``cell`` reads without a cycle check.
+        """Replace what ``cell`` reads. There is no cycle check here.
 
-        For callers that apply a batch and check once with ``plan``, and for restoring a
-        state that is already known to be acyclic (undo, redo, rollback).
+        ``Sheet`` applies a whole batch of these, runs ``plan`` once (which finds any cycle),
+        and puts the old edges back if it fails, so the check-and-restore lives there. The
+        same call restores a state already known to be acyclic (undo, redo, rollback).
         """
         self._uninstall(cell)
         self._install(cell, frozenset(cells), frozenset(ranges))

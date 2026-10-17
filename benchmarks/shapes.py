@@ -13,22 +13,12 @@ the single seed cell then recalculates the whole shape.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
+from sheet.engine.address import cell_name as a1
 from sheet.engine.sheet import Sheet
 
 DATA_COL = 100
 SEED_COL = 101
 DATA_ROWS = 2000
-
-
-def a1(row: int, col: int) -> str:
-    letters = ""
-    n = col + 1
-    while n:
-        n, rem = divmod(n - 1, 26)
-        letters = chr(ord("A") + rem) + letters
-    return f"{letters}{row + 1}"
 
 
 _DATA = f"${a1(0, DATA_COL)[:-1]}$1:${a1(0, DATA_COL)[:-1]}${DATA_ROWS}"
@@ -41,13 +31,6 @@ def heavy(prev: str) -> str:
     ``TERMS`` multiplications of the cell this one depends on."""
     products = "+".join(f"{prev}*{i}" for i in range(1, TERMS))
     return f"(SUM({_DATA})+{products})*0"
-
-
-@dataclass(frozen=True)
-class Shape:
-    name: str
-    formula_cells: int
-    build: object  # Callable[[Sheet], list[tuple[int, int, str]]]; kept loose for simplicity
 
 
 def _prepare(sheet: Sheet) -> None:

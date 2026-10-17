@@ -11,7 +11,6 @@ class ErrorKind(Enum):
     REF = "#REF!"
     NAME = "#NAME?"
     VALUE = "#VALUE!"
-    CIRC = "#CIRC!"
     NUM = "#NUM!"
 
 

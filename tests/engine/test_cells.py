@@ -102,40 +102,6 @@ def test_used_range():
     assert s.used_range() == (1, 2, 4, 7)
 
 
-def test_set_format_on_empty_and_existing_cells():
-    s = CellStore()
-    s.set_format(0, 0, "0.00")
-    assert s.get_cell(0, 0).format == "0.00"
-    assert s.get(0, 0) is None
-    s.set_cell(1, 0, num(5))
-    s.set_format(1, 0, "$#,##0.00")
-    assert s.get_cell(1, 0).value == 5.0
-    assert s.get_cell(1, 0).format == "$#,##0.00"
-
-
-def test_invalid_format_rejected_and_store_unchanged():
-    s = CellStore()
-    with pytest.raises(FormatError):
-        s.set_format(0, 0, "QQ")
-    assert len(s) == 0
-
-
-def test_set_format_range():
-    s = CellStore()
-    s.set_cell(0, 0, num(1))
-    s.set_format_range(0, 0, 1, 1, "0.0")
-    assert len(s) == 4
-    assert {s.get_cell(r, c).format for r in (0, 1) for c in (0, 1)} == {"0.0"}
-    assert s.get(0, 0) == 1.0
-
-
-def test_set_format_range_too_large_rejected_atomically():
-    s = CellStore()
-    with pytest.raises(ValueError):
-        s.set_format_range(0, 0, MAX_ROWS - 1, MAX_COLS - 1, "0.0")
-    assert len(s) == 0
-
-
 def test_concurrent_writers_to_distinct_cells():
     s = CellStore()
 
@@ -170,3 +136,21 @@ def test_formatted_cells_builds_changes_without_touching_the_store():
         s.formatted_cells(0, 0, 1, 1, "QQ")
     with pytest.raises(ValueError):
         s.formatted_cells(0, 0, MAX_ROWS - 1, MAX_COLS - 1, "0.0")
+
+
+def test_formatted_cells_creates_empty_formatted_cells_and_keeps_existing_values():
+    s = CellStore()
+    s.set_cell(1, 0, num(5))
+    changes = s.formatted_cells(0, 0, 1, 0, "$#,##0.00")
+    assert changes[(0, 0)].value is None and changes[(0, 0)].format == "$#,##0.00"  # new, empty
+    assert changes[(1, 0)].value == 5.0 and changes[(1, 0)].format == "$#,##0.00"  # existing
+
+
+def test_formatting_as_general_removes_cells_that_would_be_empty_and_unformatted():
+    s = CellStore()
+    s.set_cell(0, 0, Cell("", None, None, "0.00"))  # empty, formatted
+    s.set_cell(1, 0, num(5))
+    changes = s.formatted_cells(0, 0, 2, 0, "General")
+    assert changes[(0, 0)] is None  # empty and General again: no cell at all
+    assert changes[(2, 0)] is None  # never existed: nothing to create
+    assert changes[(1, 0)].value == 5.0 and changes[(1, 0)].format == "General"  # has content: kept

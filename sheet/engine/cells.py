@@ -18,7 +18,7 @@ from sheet.engine.formats import GENERAL, validate_format
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.values import ErrorValue, Value
 
-MAX_FORMAT_CELLS = 1_000_000  # largest area set_format_range will materialise
+MAX_FORMAT_CELLS = 1_000_000  # largest area a format change may materialise
 
 
 @dataclass(slots=True)
@@ -153,9 +153,6 @@ class CellStore:
         cols = [c for _, c in keys]
         return min(rows), min(cols), max(rows), max(cols)
 
-    def set_format(self, row: int, col: int, fmt: str) -> None:
-        self.set_format_range(row, col, row, col, fmt)
-
     def formatted_cells(
         self, r1: int, c1: int, r2: int, c2: int, fmt: str
     ) -> dict[tuple[int, int], Cell | None]:
@@ -179,11 +176,3 @@ class CellStore:
                 blank = not new.text.strip() and new.value is None
                 out[(r, c)] = None if blank and fmt == GENERAL else new
         return out
-
-    def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> None:
-        """Apply ``fmt`` to every cell in the rectangle. All-or-nothing."""
-        for pos, cell in self.formatted_cells(r1, c1, r2, c2, fmt).items():
-            if cell is None:
-                self._cells.pop(pos, None)
-            else:
-                self._cells[pos] = cell

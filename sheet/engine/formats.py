@@ -114,13 +114,6 @@ def validate_format(fmt: str) -> None:
     _compile(fmt)
 
 
-def is_date_format(fmt: str) -> bool:
-    try:
-        return isinstance(_compile(fmt), _Date)
-    except FormatError:
-        return False
-
-
 def format_value(value: Value, fmt: str) -> str:
     """Render a cell value for display using ``fmt``."""
     compiled = _compile(fmt)  # raises FormatError even for values that ignore the format

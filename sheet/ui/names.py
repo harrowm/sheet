@@ -4,23 +4,12 @@ from __future__ import annotations
 
 import re
 
+from sheet.engine.address import cell_name, column_name  # noqa: F401 - re-exported for the UI
+
 MAX_ROWS = 1_048_576
 MAX_COLS = 16_384
 
-_NAME = re.compile(r"\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*")
-
-
-def column_name(col: int) -> str:
-    letters = ""
-    n = col + 1
-    while n:
-        n, rem = divmod(n - 1, 26)
-        letters = chr(ord("A") + rem) + letters
-    return letters
-
-
-def cell_name(row: int, col: int) -> str:
-    return f"{column_name(col)}{row + 1}"
+_NAME = re.compile(r"\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*", re.ASCII)
 
 
 def parse_cell_name(text: str) -> tuple[int, int] | None:

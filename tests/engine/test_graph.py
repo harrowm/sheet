@@ -13,8 +13,27 @@ def c(name: str) -> tuple[int, int]:
     return int(name[1:]) - 1, ord(name[0]) - ord("A")
 
 
+def set_deps(g: DependencyGraph, cell, cells, ranges=()):
+    """Install a cell's dependencies, check for a cycle, and restore the old ones on failure.
+
+    This is the same install / ``plan`` / restore sequence ``Sheet`` performs for an edit, so
+    the graph's two halves (``restore_dependencies`` and ``plan``) are tested together.
+    """
+    old_cells, old_ranges = g.dependencies(cell)
+    g.restore_dependencies(cell, cells, ranges)
+    try:
+        return g.plan([cell])
+    except CycleError:
+        g.restore_dependencies(cell, old_cells, old_ranges)
+        raise
+
+
 def deps(g: DependencyGraph, name: str, *cells: str, ranges: tuple[Rect, ...] = ()):
-    return g.set_dependencies(c(name), [c(x) for x in cells], ranges)
+    return set_deps(g, c(name), [c(x) for x in cells], ranges)
+
+
+def range_count(g: DependencyGraph) -> int:
+    return len(g._range_dependents)
 
 
 # --- reference extraction ----------------------------------------------------
@@ -36,7 +55,7 @@ def test_extract_references_from_constants_and_nested_calls():
 # --- edges -------------------------------------------------------------------
 
 
-def test_set_dependencies_builds_both_directions():
+def test_installing_dependencies_builds_both_directions():
     g = DependencyGraph()
     deps(g, "B1", "A1")
     assert g.dependencies(c("B1")) == ({c("A1")}, set())
@@ -86,7 +105,7 @@ def test_removing_range_dependencies_cleans_the_index():
     deps(g, "A10")
     assert g.dependents(c("A1")) == set()
     assert g.dependents((3, 150)) == set()
-    assert g.range_count() == 0
+    assert range_count(g) == 0
 
 
 def test_two_cells_sharing_a_range():
@@ -96,7 +115,7 @@ def test_two_cells_sharing_a_range():
     deps(g, "C2", ranges=(r,))
     deps(g, "C1")
     assert g.dependents(c("A2")) == {c("C2")}
-    assert g.range_count() == 1
+    assert range_count(g) == 1
 
 
 # --- localized Kahn / recalculation plan --------------------------------------
@@ -209,7 +228,7 @@ def test_failed_edit_leaves_graph_usable():
     assert g.plan([c("C1")]).order == [c("C1"), c("A1"), c("B1")]
 
 
-def test_set_dependencies_returns_the_plan_for_the_changed_cell():
+def test_installing_dependencies_returns_the_plan_for_the_changed_cell():
     g = DependencyGraph()
     deps(g, "C1", "B1")
     plan = deps(g, "B1", "A1")
@@ -223,7 +242,7 @@ def test_long_chain_has_no_recursion_limit_and_is_fast():
     g = DependencyGraph()
     n = 20_000
     for i in range(1, n):
-        g.set_dependencies((i, 0), [(i - 1, 0)], [])
+        set_deps(g, (i, 0), [(i - 1, 0)])
     start = time.perf_counter()
     plan = g.plan([(0, 0)])
     assert time.perf_counter() - start < 1.0
@@ -233,7 +252,7 @@ def test_long_chain_has_no_recursion_limit_and_is_fast():
 def test_wide_fan_out():
     g = DependencyGraph()
     for i in range(1, 5001):
-        g.set_dependencies((i, 1), [(0, 0)], [])
+        set_deps(g, (i, 1), [(0, 0)])
     plan = g.plan([(0, 0)])
     assert len(plan.order) == 5001
     assert plan.order[0] == (0, 0)
@@ -265,7 +284,7 @@ def test_random_edits_match_brute_force_cycle_detection(edits):
         candidate = {**model, cell: set(new_deps)}
         expect_cycle = has_cycle(candidate)
         try:
-            plan = g.set_dependencies((cell, 0), [(d, 0) for d in new_deps], [])
+            plan = set_deps(g, (cell, 0), [(d, 0) for d in new_deps])
         except CycleError:
             assert expect_cycle
         else:
@@ -289,4 +308,4 @@ def test_restore_dependencies_installs_edges_without_a_cycle_check():
     assert g.dependents((1, 5)) == {c("A1")}
     g.restore_dependencies(c("A1"), [], [])
     assert g.dependents((1, 5)) == set()
-    assert g.range_count() == 0
+    assert range_count(g) == 0

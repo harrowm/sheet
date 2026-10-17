@@ -213,9 +213,6 @@ class Session:
             body["undo_dropped"] = True  # applied, but too large to keep in the undo history
         return body
 
-    def _display(self, cell_value: object, fmt: str) -> str:
-        return format_value(cell_value, fmt)  # type: ignore[arg-type]
-
     # --- reading -----------------------------------------------------------------------
 
     def _hello(self, request: Request) -> Response:
@@ -237,7 +234,7 @@ class Session:
                 if cell is None or (cell.value is None and not cell.text):
                     row.append(None)
                 else:
-                    shown = self._display(cell.value, cell.format)
+                    shown = format_value(cell.value, cell.format)
                     item = [shown, _kind(cell.value)]
                     if cell.text != shown:
                         item.append(cell.text)  # raw text, for editing and the formula bar
@@ -260,7 +257,7 @@ class Session:
         err = cell.error
         return {
             "text": cell.text,
-            "display": self._display(cell.value, cell.format),
+            "display": format_value(cell.value, cell.format),
             "kind": _kind(cell.value),
             "format": cell.format,
             "error": str(err) if err is not None else None,
@@ -311,7 +308,7 @@ class Session:
             fields = []
             for c in range(c1, c2 + 1):
                 cell = self.sheet.store.get_cell(r, c)
-                fields.append("" if cell is None else self._display(cell.value, cell.format))
+                fields.append("" if cell is None else format_value(cell.value, cell.format))
             lines.append("\t".join(fields))
         return {"text": "\n".join(lines)}
 

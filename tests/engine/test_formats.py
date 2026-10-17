@@ -1,6 +1,6 @@
 import pytest
 
-from sheet.engine.formats import FormatError, format_value, is_date_format, validate_format
+from sheet.engine.formats import FormatError, format_value, validate_format
 from sheet.engine.values import ErrorKind, ErrorValue
 
 
@@ -79,14 +79,6 @@ def test_date_formats(fmt, value, expected):
 def test_date_format_on_non_numbers_falls_back_to_general():
     assert format_value("hi", "DD/MM/YYYY") == "hi"
     assert format_value(None, "DD/MM/YYYY") == ""
-
-
-def test_is_date_format():
-    assert is_date_format("DD/MM/YYYY")
-    assert is_date_format("HH:mm")
-    assert not is_date_format("General")
-    assert not is_date_format("0.00")
-    assert not is_date_format("$#,##0.00")
 
 
 @pytest.mark.parametrize(

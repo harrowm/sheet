@@ -30,6 +30,8 @@ def test_parse_cell_names(text, expected):
     assert parse_cell_name(text) == expected
 
 
-@pytest.mark.parametrize("text", ["", "A", "1", "A0", "XFE1", "A1048577", "A1:B2", "hello", "A-1"])
+@pytest.mark.parametrize(
+    "text", ["", "A", "1", "A0", "XFE1", "A1048577", "A1:B2", "hello", "A-1", "A١", "Ａ1"]
+)
 def test_parse_rejects_bad_names(text):
     assert parse_cell_name(text) is None

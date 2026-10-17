@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Literal, TextIO, cast
 
+from sheet.engine.address import cell_name
 from sheet.engine.entry import parse_entry
 from sheet.engine.formats import format_value
 from sheet.engine.lexer import FormulaSyntaxError
@@ -40,15 +41,6 @@ def _text(source: Source, mode: str, encoding: str) -> Iterator[TextIO]:
             yield cast(TextIO, f)
     else:
         yield source
-
-
-def _name(row: int, col: int) -> str:
-    letters = ""
-    n = col + 1
-    while n:
-        n, rem = divmod(n - 1, 26)
-        letters = chr(ord("A") + rem) + letters
-    return f"{letters}{row + 1}"
 
 
 def export_csv(
@@ -132,7 +124,7 @@ def import_csv(
                 except FormulaSyntaxError as exc:
                     if bad_formulas == "raise":
                         raise CsvError(
-                            f"{_name(row + i, col + j)}: {exc}", row + i, col + j
+                            f"{cell_name(row + i, col + j)}: {exc}", row + i, col + j
                         ) from exc
                     text = "'" + text
             edits.append((row + i, col + j, text))
