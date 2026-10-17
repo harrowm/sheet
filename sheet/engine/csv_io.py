@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from typing import Literal, TextIO, cast
 
 from sheet.engine.address import cell_name
-from sheet.engine.entry import parse_entry
+from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.formats import format_value
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
@@ -115,17 +115,13 @@ def import_csv(
             f"{len(rows)} rows x {width} columns does not fit on the grid at that position"
         )
 
-    edits: list[tuple[int, int, str]] = []
-    for i, fields in enumerate(rows):
-        for j, text in enumerate(fields):
-            if text.lstrip().startswith("="):
-                try:
-                    parse_entry(text)
-                except FormulaSyntaxError as exc:
-                    if bad_formulas == "raise":
-                        raise CsvError(
-                            f"{cell_name(row + i, col + j)}: {exc}", row + i, col + j
-                        ) from exc
-                    text = "'" + text
-            edits.append((row + i, col + j, text))
-    return sheet.set_entries(edits)
+    positions = [(row + i, col + j) for i, fields in enumerate(rows) for j in range(len(fields))]
+    texts = [text for fields in rows for text in fields]
+    entries: list[tuple[int, int, Entry]] = []
+    for (r, c), text, parsed in zip(positions, texts, sheet.parse_all(texts), strict=True):
+        if isinstance(parsed, FormulaSyntaxError):
+            if bad_formulas == "raise":
+                raise CsvError(f"{cell_name(r, c)}: {parsed}", r, c) from parsed
+            parsed = parse_entry("'" + text)  # keep the malformed formula as plain text
+        entries.append((r, c, parsed))
+    return sheet.set_parsed(entries)

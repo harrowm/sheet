@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from sheet.engine.address import cell_name
-from sheet.engine.entry import Entry, parse_entry
+from sheet.engine.entry import Entry
 from sheet.engine.formats import GENERAL, FormatError, validate_format
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
@@ -127,12 +127,21 @@ def _formats(data: dict[str, Any]) -> list[str]:
     return formats
 
 
-def _cells(data: dict[str, Any], formats: list[str]) -> list[tuple[int, int, Entry, str]]:
+def _cells(
+    data: dict[str, Any], formats: list[str], sheet: Sheet
+) -> list[tuple[int, int, Entry, str]]:
+    """Validate every saved cell and parse its text (on the sheet's thread pool when large).
+
+    The first problem in file order is the one reported, whether it is a malformed record or
+    a malformed formula: a bad record stops the scan, but formulas before it are still
+    parsed so that an earlier syntax error wins.
+    """
     raw = data.get("cells")
     if not isinstance(raw, list):
         raise FileFormatError("cells must be a list")
     seen: set[tuple[int, int]] = set()
-    out: list[tuple[int, int, Entry, str]] = []
+    found: list[tuple[int, int, str, str]] = []
+    problem: FileFormatError | None = None
     for i, record in enumerate(raw, start=1):
         ok = (
             isinstance(record, list)
@@ -143,21 +152,30 @@ def _cells(data: dict[str, Any], formats: list[str]) -> list[tuple[int, int, Ent
             and (len(record) == 3 or _is_int(record[3]))
         )
         if not ok:
-            raise FileFormatError(f"cell {i} is malformed")
+            problem = FileFormatError(f"cell {i} is malformed")
+            break
         row, col, text = record[0], record[1], record[2]
         if not (0 <= row < MAX_ROWS and 0 <= col < MAX_COLS):
-            raise FileFormatError(f"cell {i} is outside the grid")
+            problem = FileFormatError(f"cell {i} is outside the grid")
+            break
         fmt_index = record[3] if len(record) == 4 else 0
         if not 0 <= fmt_index < len(formats):
-            raise FileFormatError(f"cell {i} refers to an unknown format")
+            problem = FileFormatError(f"cell {i} refers to an unknown format")
+            break
         if (row, col) in seen:
-            raise FileFormatError(f"cell {cell_name(row, col)} appears twice")
+            problem = FileFormatError(f"cell {cell_name(row, col)} appears twice")
+            break
         seen.add((row, col))
-        try:
-            entry = parse_entry(text)
-        except FormulaSyntaxError as exc:
-            raise FileFormatError(f"{cell_name(row, col)}: {exc}") from exc
-        out.append((row, col, entry, formats[fmt_index]))
+        found.append((row, col, text, formats[fmt_index]))
+    out: list[tuple[int, int, Entry, str]] = []
+    for (row, col, _, fmt), entry in zip(
+        found, sheet.parse_all([text for _, _, text, _ in found]), strict=True
+    ):
+        if isinstance(entry, FormulaSyntaxError):
+            raise FileFormatError(f"{cell_name(row, col)}: {entry}") from entry
+        out.append((row, col, entry, fmt))
+    if problem is not None:
+        raise problem
     return out
 
 
@@ -169,10 +187,10 @@ def load_sheet(path: str | os.PathLike[str], **sheet_options: Any) -> Sheet:
     sheet in only if this returns.
     """
     data = _read(path)
-    cells = _cells(data, _formats(data))
+    formats = _formats(data)
     sheet = Sheet(**sheet_options)
     try:
-        sheet.load_cells(cells)
+        sheet.load_cells(_cells(data, formats, sheet))
     except BaseException:
         sheet.close()
         raise

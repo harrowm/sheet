@@ -20,6 +20,7 @@ from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.evaluator import evaluate
 from sheet.engine.formats import GENERAL
 from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_references
+from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
 from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
@@ -39,6 +40,8 @@ Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
 PARALLEL_REWRITE_MIN = 20_000  # structural edits rewrite on the thread pool above this many cells
 PARALLEL_REWRITE_CHUNK = 1_000  # cells per task when they do
+PARALLEL_PARSE_MIN = 5_000  # entries are parsed on the thread pool above this many
+PARALLEL_PARSE_CHUNK = 1_000  # entries per task when they are
 DEFAULT_MAX_HISTORY_CELLS = 1_000_000  # total changed cells the undo/redo history may hold
 SNAPSHOT_MIN_READERS = 4  # a range read by fewer formulas is not worth packing
 
@@ -221,9 +224,39 @@ class Sheet:
         All-or-nothing: if any entry is invalid or the batch creates a cycle, nothing
         changes. For repeated positions the last entry wins.
         """
+        items = edits if isinstance(edits, list) else list(edits)
+        parsed = self.parse_all([text for _, _, text in items])
+        ready: list[tuple[int, int, Entry]] = []
+        for (row, col, _), entry in zip(items, parsed, strict=True):
+            self.store.get_cell(row, col)  # a position outside the grid is reported in order too
+            if isinstance(entry, FormulaSyntaxError):  # the first bad entry, in order
+                raise entry
+            ready.append((row, col, entry))
+        return self.set_parsed(ready)
+
+    def parse_all(self, texts: Sequence[str]) -> list[Entry | FormulaSyntaxError]:
+        """Parse many entries, on the thread pool when there are enough.
+
+        A malformed formula is returned in its place instead of raised, so the caller can
+        report the first one in order (or tolerate them, as CSV import can).
+        """
+
+        def parse_chunk(part: Sequence[str]) -> list[Entry | FormulaSyntaxError]:
+            out: list[Entry | FormulaSyntaxError] = []
+            for text in part:
+                try:
+                    out.append(parse_entry(text))
+                except FormulaSyntaxError as exc:
+                    out.append(exc)
+            return out
+
+        chunks = self._recalc.map(parse_chunk, texts, PARALLEL_PARSE_MIN, PARALLEL_PARSE_CHUNK)
+        return [entry for chunk in chunks for entry in chunk]
+
+    def set_parsed(self, items: Iterable[tuple[int, int, Entry]]) -> frozenset[Pos]:
+        """``set_entries`` for entries that are already parsed."""
         changes: dict[Pos, Cell | None] = {}
-        for row, col, text in edits:
-            entry = parse_entry(text)  # raises before anything is touched
+        for row, col, entry in items:
             pos = (row, col)
             old = changes[pos] if pos in changes else self.store.get_cell(row, col)
             fmt = old.format if old is not None else GENERAL
@@ -408,15 +441,22 @@ class Sheet:
         target = self.store.cells_in(row, col, row + clip.rows - 1, col + clip.cols - 1)
         for pos, existing in target.items():
             changes[pos] = _cleared(existing) if values_only else None
-        for (dr, dc), src in clip.cells.items():
-            pos = (row + dr, col + dc)
-            if values_only:
+        if values_only:
+            for (dr, dc), src in clip.cells.items():
+                pos = (row + dr, col + dc)
                 old = target.get(pos)
                 fmt = old.format if old is not None else GENERAL
                 entry = parse_entry(_value_text(src.value))
                 changes[pos] = Cell.from_entry(entry, fmt) if entry.text.strip() else _cleared(old)
-            else:
-                changes[pos] = _rewritten(src, shifted)[0]
+            return changes
+
+        def rewrite_chunk(part: Sequence[tuple[Pos, Cell]]) -> dict[Pos, Cell | None]:
+            return {(row + dr, col + dc): _rewritten(src, shifted)[0] for (dr, dc), src in part}
+
+        for placed in self._recalc.map(
+            rewrite_chunk, list(clip.cells.items()), PARALLEL_REWRITE_MIN, PARALLEL_REWRITE_CHUNK
+        ):
+            changes.update(placed)
         return changes
 
     # --- history -----------------------------------------------------------------
