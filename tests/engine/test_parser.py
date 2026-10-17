@@ -96,3 +96,29 @@ def test_function_name_is_uppercased_and_no_args_allowed():
 def test_syntax_errors(bad):
     with pytest.raises(FormulaSyntaxError):
         parse(bad)
+
+
+@pytest.mark.parametrize(
+    ("text", "position"),
+    [
+        ('="abc""x', 1),  # "" inside a string is an escaped quote, so this string never ends
+        ('=1+"a""', 3),
+        ('=A1&"x"&"y', 8),
+        ('="a" "b', 5),
+    ],
+)
+def test_unterminated_string_error_points_at_its_opening_quote(text, position):
+    with pytest.raises(FormulaSyntaxError) as info:
+        parse(text)
+    assert info.value.pos == position
+
+
+def test_binary_operator_precedence_and_associativity():
+    assert parse("=1+2*3") == parse("=1+(2*3)")
+    assert parse("=1&2+3") == parse("=1&(2+3)")
+    assert parse("=1=2&3") == parse("=1=(2&3)")
+    assert parse("=2^3^2") == parse("=(2^3)^2")  # left-associative, as in Excel
+    assert parse("=-2^2") == parse("=(-2)^2")  # unary binds tighter than ^
+    assert parse("=1-2-3") == parse("=(1-2)-3")
+    assert parse("=1<2<3") == parse("=(1<2)<3")
+    assert parse("=2*3%") == parse("=2*(3%)")

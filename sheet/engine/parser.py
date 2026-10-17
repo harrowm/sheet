@@ -1,19 +1,13 @@
 """Recursive-descent parser: formula text -> AST. Runs once, on data entry.
 
-Grammar (lowest to highest precedence):
-    comparison := concat (("=" | "<>" | "<" | ">" | "<=" | ">=") concat)*
-    concat     := additive ("&" additive)*
-    additive   := term (("+" | "-") term)*
-    term       := power (("*" | "/") power)*
-    power      := unary ("^" unary)*          left-associative, as in Excel: 2^3^2 is 64
+Binary operators are parsed by precedence climbing (``_BINARY`` below, all left-associative,
+so 2^3^2 is 64 as in Excel). Underneath them:
     unary      := ("-" | "+") unary | postfix  binds tighter than ^, as in Excel
     postfix    := primary "%"*
-    primary    := NUMBER | STRING | BOOL | ERROR | ref [":" ref] | IDENT "(" [args] ")" | "(" comparison ")"
+    primary    := NUMBER | STRING | BOOL | ERROR | ref [":" ref] | IDENT "(" [args] ")" | "(" expression ")"
 """
 
 from __future__ import annotations
-
-from collections.abc import Callable
 
 from sheet.engine.ast import (
     BinaryOp,
@@ -33,7 +27,14 @@ ensure_recursion_headroom()
 MAX_ROWS = 1_048_576
 MAX_COLS = 16_384
 
-_COMPARE = ("=", "<>", "<", ">", "<=", ">=")
+# Binding power of each binary operator: a higher number binds tighter.
+_BINARY = {
+    "=": 1, "<>": 1, "<": 1, ">": 1, "<=": 1, ">=": 1,  # comparison
+    "&": 2,  # concatenation
+    "+": 3, "-": 3,
+    "*": 4, "/": 4,
+    "^": 5,
+}  # fmt: skip
 
 
 def parse_ref(text: str, pos: int = 0) -> CellRef:
@@ -64,7 +65,7 @@ def parse(text: str) -> Node:
     """Parse formula text (which must start with ``=``) into an AST."""
     if not text.startswith("="):
         raise FormulaSyntaxError("Formula must start with '='", 0)
-    return _Parser(tokenize(text[1:]), offset=1).parse()
+    return _Parser(tokenize(text[1:], offset=1), offset=1).parse()
 
 
 class _Parser:
@@ -75,7 +76,7 @@ class _Parser:
         self._depth = 0  # current nesting of parentheses and function calls
 
     def parse(self) -> Node:
-        node = self._comparison()
+        node = self._expression()
         if self._peek().kind is not TokenKind.EOF:
             self._fail("Unexpected token")
         return node
@@ -105,31 +106,16 @@ class _Parser:
             self._fail(f"Expected {what}")
         return self._next()
 
-    def _binary_left(self, operand: Callable[[], Node], *ops: str) -> Node:
-        node = operand()
-        while self._at_op(*ops):
-            op = str(self._next().value)
-            node = BinaryOp(op, node, operand())
-        return node
-
-    def _comparison(self) -> Node:
-        return self._binary_left(self._concat, *_COMPARE)
-
-    def _concat(self) -> Node:
-        return self._binary_left(self._additive, "&")
-
-    def _additive(self) -> Node:
-        return self._binary_left(self._term, "+", "-")
-
-    def _term(self) -> Node:
-        return self._binary_left(self._power, "*", "/")
-
-    def _power(self) -> Node:
-        node = self._unary()
-        while self._at_op("^"):
+    def _expression(self, min_power: int = 1) -> Node:
+        """An expression whose binary operators all bind at least as tightly as ``min_power``."""
+        left = self._unary()
+        while True:
+            tok = self._peek()
+            power = _BINARY.get(str(tok.value), 0) if tok.kind is TokenKind.OP else 0
+            if power < min_power:
+                return left
             self._next()
-            node = BinaryOp("^", node, self._unary())
-        return node
+            left = BinaryOp(str(tok.value), left, self._expression(power + 1))
 
     def _unary(self) -> Node:
         if self._at_op("-", "+"):
@@ -161,7 +147,7 @@ class _Parser:
             case TokenKind.LPAREN:
                 self._next()
                 self._descend()
-                node = self._comparison()
+                node = self._expression()
                 self._expect(TokenKind.RPAREN, "')'")
                 self._depth -= 1
                 return node
@@ -187,10 +173,10 @@ class _Parser:
         self._descend()
         args: list[Node] = []
         if self._peek().kind is not TokenKind.RPAREN:
-            args.append(self._comparison())
+            args.append(self._expression())
             while self._peek().kind is TokenKind.COMMA:
                 self._next()
-                args.append(self._comparison())
+                args.append(self._expression())
         self._expect(TokenKind.RPAREN, "')'")
         self._depth -= 1
         return FuncCall(name, tuple(args))

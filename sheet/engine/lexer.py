@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
 from enum import Enum, auto
+from typing import NamedTuple
 
 from sheet.engine.values import ErrorKind
 
@@ -33,76 +33,78 @@ class TokenKind(Enum):
     EOF = auto()
 
 
-@dataclass(frozen=True, slots=True)
-class Token:
+class Token(NamedTuple):
     kind: TokenKind
     value: float | str | bool | None
     pos: int
 
 
-_NUMBER = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)  # ASCII digits only
-_REF = re.compile(r"\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])", re.ASCII)
-_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
-_OPS = ("<>", "<=", ">=", "+", "-", "*", "/", "^", "%", "&", "=", "<", ">")
+# One pattern with a named group per token kind. Alternatives are tried in order, so earlier
+# ones win: a number beats a reference beats a name, and "<>" beats "<".
 _ERRORS = tuple(k.value for k in ErrorKind)
-_SINGLE = {"(": TokenKind.LPAREN, ")": TokenKind.RPAREN, ",": TokenKind.COMMA, ":": TokenKind.COLON}
+_TOKEN = re.compile(
+    "|".join(
+        [
+            r"(?P<space>\s+)",
+            r'(?P<string>"(?:[^"]|"")*+")',  # possessive: "" is always an escaped quote
+            r'(?P<unterminated>")',
+            "(?P<error>" + "|".join(re.escape(e) for e in _ERRORS) + ")",
+            r"(?P<badhash>\#)",
+            r"(?P<punct>[(),:])",
+            r"(?P<number>(?a:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))",  # ASCII digits only
+            r"(?P<ref>(?a:\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])))",
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_.]*)",
+            r"(?P<op><>|<=|>=|[-+*/^%&=<>])",
+        ]
+    )
+)
+_PUNCTUATION = {
+    "(": TokenKind.LPAREN,
+    ")": TokenKind.RPAREN,
+    ",": TokenKind.COMMA,
+    ":": TokenKind.COLON,
+}
 
 
-def tokenize(text: str) -> list[Token]:
+def tokenize(text: str, offset: int = 0) -> list[Token]:
+    """Split formula text into tokens. ``offset`` is added to the position in an error, for
+    callers that strip a leading character (the ``=``) before lexing."""
     tokens: list[Token] = []
+    append = tokens.append
+    match = _TOKEN.match
     i, n = 0, len(text)
     while i < n:
-        ch = text[i]
-        if ch.isspace():
-            i += 1
-        elif ch == '"':
-            i = _string(text, i, tokens)
-        elif ch == "#":
-            err = next((e for e in _ERRORS if text.startswith(e, i)), None)
-            if err is None:
-                raise FormulaSyntaxError("Unknown error literal", i)
-            tokens.append(Token(TokenKind.ERROR, err, i))
-            i += len(err)
-        elif ch in _SINGLE:
-            tokens.append(Token(_SINGLE[ch], ch, i))
-            i += 1
-        elif (m := _NUMBER.match(text, i)) is not None:
+        m = match(text, i)
+        if m is None:
+            raise FormulaSyntaxError(f"Unexpected character {text[i]!r}", i + offset)
+        kind, end = m.lastgroup, m.end()
+        if kind == "space":
+            pass
+        elif kind == "ref":
+            append(Token(TokenKind.REF, m.group(), i))
+        elif kind == "number":
             number = float(m.group())
             if not math.isfinite(number):
-                raise FormulaSyntaxError(f"The number {m.group()[:20]!r} is too large", i)
-            tokens.append(Token(TokenKind.NUMBER, number, i))
-            i = m.end()
-        elif (m := _REF.match(text, i)) is not None:
-            tokens.append(Token(TokenKind.REF, m.group(), i))
-            i = m.end()
-        elif (m := _IDENT.match(text, i)) is not None:
+                raise FormulaSyntaxError(f"The number {m.group()[:20]!r} is too large", i + offset)
+            append(Token(TokenKind.NUMBER, number, i))
+        elif kind == "op":
+            append(Token(TokenKind.OP, m.group(), i))
+        elif kind == "punct":
+            append(Token(_PUNCTUATION[m.group()], m.group(), i))
+        elif kind == "name":
             word = m.group()
             if word.upper() in ("TRUE", "FALSE"):
-                tokens.append(Token(TokenKind.BOOL, word.upper() == "TRUE", i))
+                append(Token(TokenKind.BOOL, word.upper() == "TRUE", i))
             else:
-                tokens.append(Token(TokenKind.IDENT, word, i))
-            i = m.end()
-        else:
-            op = next((o for o in _OPS if text.startswith(o, i)), None)
-            if op is None:
-                raise FormulaSyntaxError(f"Unexpected character {ch!r}", i)
-            tokens.append(Token(TokenKind.OP, op, i))
-            i += len(op)
-    tokens.append(Token(TokenKind.EOF, None, n))
+                append(Token(TokenKind.IDENT, word, i))
+        elif kind == "string":
+            append(Token(TokenKind.STRING, m.group()[1:-1].replace('""', '"'), i))
+        elif kind == "error":
+            append(Token(TokenKind.ERROR, m.group(), i))
+        elif kind == "unterminated":
+            raise FormulaSyntaxError("Unterminated string", i + offset)
+        else:  # badhash
+            raise FormulaSyntaxError("Unknown error literal", i + offset)
+        i = end
+    append(Token(TokenKind.EOF, None, n))
     return tokens
-
-
-def _string(text: str, start: int, tokens: list[Token]) -> int:
-    parts: list[str] = []
-    i = start + 1
-    while i < len(text):
-        if text[i] == '"':
-            if text.startswith('""', i):
-                parts.append('"')
-                i += 2
-                continue
-            tokens.append(Token(TokenKind.STRING, "".join(parts), start))
-            return i + 1
-        parts.append(text[i])
-        i += 1
-    raise FormulaSyntaxError("Unterminated string", start)
