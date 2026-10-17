@@ -26,6 +26,7 @@ from sheet.engine.values import ErrorValue, Value
 
 Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
+DEFAULT_MAX_HISTORY_CELLS = 1_000_000  # total changed cells the undo/redo history may hold
 SNAPSHOT_MIN_READERS = 4  # a range read by fewer formulas is not worth packing
 
 
@@ -109,11 +110,15 @@ class Sheet:
         max_history: int = DEFAULT_MAX_HISTORY,
         workers: int | None = None,
         parallel_threshold: int = DEFAULT_THRESHOLD,
+        max_history_cells: int = DEFAULT_MAX_HISTORY_CELLS,
     ) -> None:
         self.store = CellStore()
         self.graph = DependencyGraph()
         self._recalc = ParallelRecalculator(workers, parallel_threshold)
-        self._undo: deque[_Transaction] = deque(maxlen=max_history)
+        self._undo: deque[_Transaction] = deque()
+        self._max_history = max_history
+        self._max_history_cells = max_history_cells
+        self.last_undo_dropped = False  # the latest change was too big to keep in the history
         self._redo: list[_Transaction] = []
 
     def close(self) -> None:
@@ -130,6 +135,11 @@ class Sheet:
 
     def get(self, row: int, col: int) -> Value:
         return self.store.get(row, col)
+
+    @property
+    def history_cells(self) -> int:
+        """Changed cells currently held by the undo and redo history."""
+        return sum(len(tx.before) for tx in (*self._undo, *self._redo))
 
     @property
     def can_undo(self) -> bool:
@@ -338,12 +348,22 @@ class Sheet:
 
         after = {pos: self.store.get_cell(*pos) for pos in before}
         changed = {pos for pos in before if not _same_cell(before[pos], after[pos])}
+        self.last_undo_dropped = False
         if not changed:
             return frozenset()
+        if len(changed) > self._max_history_cells:
+            # Too big to remember. Older steps would be invalid across it, so drop them all.
+            self.clear_history()
+            self.last_undo_dropped = True
+            return frozenset(changed)
         self._undo.append(
             _Transaction({p: before[p] for p in changed}, {p: after[p] for p in changed})
         )
         self._redo.clear()
+        while len(self._undo) > self._max_history or (
+            len(self._undo) > 1 and self.history_cells > self._max_history_cells
+        ):
+            self._undo.popleft()
         return frozenset(changed)
 
     def _recalculate(self, plan: RecalcPlan, touch: Callable[[Pos], None]) -> None:

@@ -93,8 +93,11 @@ def _bounds(positions: frozenset[Pos]) -> list[int] | None:
 class Session:
     """One open spreadsheet and the state a client needs around it."""
 
-    def __init__(self, workers: int | None = None) -> None:
-        self.sheet = Sheet(workers=workers)
+    def __init__(self, workers: int | None = None, max_history_cells: int | None = None) -> None:
+        self._sheet_options: dict[str, Any] = {"workers": workers}
+        if max_history_cells is not None:
+            self._sheet_options["max_history_cells"] = max_history_cells
+        self.sheet = Sheet(**self._sheet_options)
         self.version = 0
         self._clipboard: Clipboard | None = None
         self._ops: dict[str, Callable[[Request], Response]] = {
@@ -174,7 +177,10 @@ class Session:
         if positions:
             self.version += 1
         listing = None if len(positions) > CHANGED_LIMIT else sorted([r, c] for r, c in positions)
-        return {"changed": listing, "bounds": _bounds(positions)}
+        body: Response = {"changed": listing, "bounds": _bounds(positions)}
+        if self.sheet.last_undo_dropped:
+            body["undo_dropped"] = True  # applied, but too large to keep in the undo history
+        return body
 
     def _display(self, cell_value: object, fmt: str) -> str:
         return format_value(cell_value, fmt)  # type: ignore[arg-type]
@@ -321,12 +327,12 @@ class Session:
 
     def _load(self, request: Request) -> Response:
         path = _text(request, "path")
-        new = load_sheet(path)  # raises before anything is touched if the file is bad
+        new = load_sheet(path, **self._sheet_options)  # raises first if the file is bad
         self._replace_sheet(new)
         return {"cells": len(new.store), "path": path, "reset": True}
 
     def _new(self, request: Request) -> Response:
-        self._replace_sheet(Sheet())
+        self._replace_sheet(Sheet(**self._sheet_options))
         return {"reset": True}
 
     def _import_csv(self, request: Request) -> Response:

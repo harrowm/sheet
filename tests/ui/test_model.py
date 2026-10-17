@@ -200,3 +200,15 @@ def test_a_failed_load_does_not_reset_the_cache(model, call, wait_until, tmp_pat
     model.send("load", path=str(bad))
     wait_until(lambda: errors == ["file"])
     assert not resets and shown(model, 0, 0) == "keep"
+
+
+def test_a_change_too_big_to_undo_raises_a_notice(engine, call, wait_until):
+    # the engine's default history cap is a million cells; ask for more than that
+    model = SheetModel(engine)
+    notices = []
+    model.notice.connect(notices.append)
+    entries = [[r, c, "x"] for r in range(1001) for c in range(1001)]  # 1,002,001 cells
+    model.send("edit", entries=entries)
+    wait_until(lambda: notices, timeout=60, message="no notice for an un-undoable change")
+    assert "undo" in notices[0].lower()
+    assert not engine.can_undo

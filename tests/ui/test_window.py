@@ -523,3 +523,10 @@ def test_csv_actions_are_separate_from_native_files(win, put, wait_until, tmp_pa
     wait_until(lambda: (tmp_path / "x.csv").exists())
     assert win.current_path is None  # exporting CSV does not make it the document
     assert "*" in win.windowTitle()  # and does not count as saving it
+
+
+def test_the_window_tells_the_user_when_a_change_cannot_be_undone(win, wait_until):
+    win.model.notice.emit(
+        "That change was too large to keep in the undo history, so it cannot be undone"
+    )
+    assert "cannot be undone" in win.status_text() and not win.status_is_error()

@@ -262,6 +262,7 @@ class MainWindow(QMainWindow):
         )
         self.model.dataChanged.connect(lambda *_: self._load_formula_bar())
         self.model.error.connect(self._on_model_error)
+        self.model.notice.connect(self.show_message)
         self.name_box.returnPressed.connect(self._name_box_entered)
         self.formula_bar.returnPressed.connect(self.commit_formula_bar)
         self.formula_bar.escaped.connect(self._abandon_formula_edit)

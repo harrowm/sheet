@@ -159,7 +159,7 @@ def _cells(data: dict[str, Any], formats: list[str]) -> list[tuple[int, int, Ent
     return out
 
 
-def load_sheet(path: str | os.PathLike[str], workers: int | None = None) -> Sheet:
+def load_sheet(path: str | os.PathLike[str], **sheet_options: Any) -> Sheet:
     """Read a sheet file into a new ``Sheet`` (with no undo history).
 
     Raises FileFormatError for an invalid file, CycleError if its formulas are circular,
@@ -168,7 +168,7 @@ def load_sheet(path: str | os.PathLike[str], workers: int | None = None) -> Shee
     """
     data = _read(path)
     cells = _cells(data, _formats(data))
-    sheet = Sheet(workers=workers)
+    sheet = Sheet(**sheet_options)
     try:
         sheet.load_cells(cells)
     except BaseException:

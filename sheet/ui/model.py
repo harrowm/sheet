@@ -37,6 +37,7 @@ Key = tuple[int, int]
 class SheetModel(QAbstractTableModel):
     error = pyqtSignal(str, str)  # (kind, message) for a rejected request
     changed = pyqtSignal(object)  # bounds [r1, c1, r2, c2] of a successful change
+    notice = pyqtSignal(str)  # something the user should know about a change that succeeded
 
     def __init__(
         self,
@@ -193,3 +194,7 @@ class SheetModel(QAbstractTableModel):
         self._invalidate(bounds)
         if bounds is not None:
             self.changed.emit(bounds)
+        if response.get("undo_dropped"):
+            self.notice.emit(
+                "That change was too large to keep in the undo history, so it cannot be undone"
+            )
