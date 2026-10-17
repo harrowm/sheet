@@ -74,7 +74,7 @@ def select(win, first, last):
 def test_window_shows_the_engine_and_a_full_size_grid(win):
     assert win.model.rowCount() == 1_048_576 and win.model.columnCount() == 16_384
     assert "GIL off" in win.engine_label.text()
-    assert win.windowTitle().startswith("Sheet")
+    assert "Sheet" in win.windowTitle() and "Untitled" in win.windowTitle()
     assert win.name_box.text() == "A1"
 
 
@@ -330,7 +330,7 @@ def test_save_and_open_csv(win, put, call, wait_until, tmp_path):
     put(("A1", "1"), ("B1", "=A1+1"))
     path = str(tmp_path / "sheet.csv")
     win.save_csv(path, "raw")
-    wait_until(lambda: (tmp_path / "sheet.csv").exists() and "Saved" in win.status_text())
+    wait_until(lambda: (tmp_path / "sheet.csv").exists() and "Exported" in win.status_text())
     assert (tmp_path / "sheet.csv").read_bytes() == b"1,=A1+1\r\n"
     goto(win, "D5")
     win.open_csv(path)
@@ -376,3 +376,150 @@ def test_closing_the_window_shuts_the_engine_down(engine, qapp, wait_until):
     w.show()
     w.close()
     assert not engine.alive
+
+
+# --- native files: new, open, save -------------------------------------------------------------------
+
+
+def make_doc(win, put, wait_until):
+    put(("A1", "5"), ("B1", "=A1*2"))
+    select(win, "B1", "B1")
+    win.apply_format("$#,##0.00")
+    wait_until(lambda: shown(win, "B1") == "$10.00")
+
+
+def test_file_actions_and_shortcuts_exist(win):
+    names = win.actions_by_name
+    for n in ("new", "open_file", "save", "save_as", "import_csv", "export_values", "export_raw"):
+        assert n in names, n
+    assert names["new"].shortcut().toString() == "Ctrl+N"
+    assert names["open_file"].shortcut().toString() == "Ctrl+O"
+    assert names["save"].shortcut().toString() == "Ctrl+S"
+    assert "Shift" in names["save_as"].shortcut().toString()
+
+
+def test_title_shows_the_file_name_and_a_modified_marker(win, put, wait_until, tmp_path):
+    assert "*" not in win.windowTitle()
+    put(("A1", "1"))
+    wait_until(lambda: win.is_dirty() and "*" in win.windowTitle())
+    path = str(tmp_path / "budget.sheet")
+    win.save_file(path)
+    wait_until(lambda: not win.is_dirty() and "budget.sheet" in win.windowTitle())
+    assert "*" not in win.windowTitle() and win.current_path == path
+    put(("A2", "2"))
+    wait_until(lambda: "*" in win.windowTitle() and "budget.sheet" in win.windowTitle())
+
+
+def test_save_then_open_restores_everything(win, put, call, wait_until, tmp_path):
+    make_doc(win, put, wait_until)
+    path = str(tmp_path / "doc.sheet")
+    win.save_file(path)
+    wait_until(lambda: (tmp_path / "doc.sheet").exists() and "Saved" in win.status_text())
+    assert "2 cells" in win.status_text()
+    win.new_file()
+    wait_until(lambda: shown(win, "A1") in ("", None) and shown(win, "B1") in ("", None))
+    assert "Untitled" in win.windowTitle() and win.current_path is None
+    win.open_file(path)
+    wait_shown(win, wait_until, "B1", "$10.00")
+    wait_shown(win, wait_until, "A1", "5")
+    assert win.current_path == path and not win.is_dirty()
+    assert "doc.sheet" in win.windowTitle()
+    assert not win.actions_by_name["undo"].isEnabled()  # a loaded document starts with no history
+    put(("A1", "7"))  # formulas were rebuilt on load
+    wait_shown(win, wait_until, "B1", "$14.00")
+
+
+def test_opening_replaces_what_was_on_screen(win, put, wait_until, tmp_path):
+    put(("A1", "old"), ("Z9", "stale"))
+    wait_shown(win, wait_until, "Z9", "stale")
+    other = tmp_path / "other.sheet"
+    other.write_text(
+        '{"format":"sheet","version":1,"formats":["General"],"cells":[[0,0,"fresh"]]}\n'
+    )
+    win.open_file(str(other))
+    wait_shown(win, wait_until, "A1", "fresh")
+    wait_until(lambda: shown(win, "Z9") in ("", None))
+    assert (win.view.currentIndex().row(), win.view.currentIndex().column()) == (0, 0)
+
+
+def test_a_bad_file_is_reported_and_the_document_is_kept(win, put, wait_until, tmp_path):
+    put(("A1", "mine"))
+    wait_shown(win, wait_until, "A1", "mine")
+    bad = tmp_path / "bad.sheet"
+    bad.write_text("this is not a sheet file")
+    win.open_file(str(bad))
+    wait_until(lambda: win.status_is_error())
+    assert "sheet file" in win.status_text().lower()
+    assert shown(win, "A1") == "mine" and win.current_path is None
+    win.open_file(str(tmp_path / "missing.sheet"))
+    wait_until(lambda: "missing.sheet" in win.status_text())
+
+
+def test_save_without_a_path_asks_for_one_instead_of_saving(win, put, wait_until):
+    put(("A1", "1"))
+    wait_until(win.is_dirty)
+    win.save_file()  # non-interactive: no dialog, and nothing is written
+    QTest.qWait(50)
+    assert win.current_path is None and win.is_dirty()
+
+
+def test_save_uses_the_current_path_and_a_failed_save_stays_dirty(win, put, wait_until, tmp_path):
+    put(("A1", "1"))
+    win.save_file(str(tmp_path / "a.sheet"))
+    wait_until(lambda: not win.is_dirty())
+    put(("A1", "2"))
+    wait_until(win.is_dirty)
+    win.save_file()  # no argument: the same file again
+    wait_until(lambda: not win.is_dirty())
+    win.current_path = str(tmp_path / "no" / "such" / "dir.sheet")
+    put(("A1", "3"))
+    wait_until(win.is_dirty)
+    win.save_file()
+    wait_until(lambda: win.status_is_error())
+    assert win.is_dirty()
+
+
+def test_save_as_adds_the_extension():
+    from sheet.ui.window import with_extension
+
+    assert with_extension("/tmp/budget") == "/tmp/budget.sheet"
+    assert with_extension("/tmp/budget.sheet") == "/tmp/budget.sheet"
+    assert with_extension("/tmp/data.csv") == "/tmp/data.csv"  # an explicit extension is respected
+
+
+def test_discarding_unsaved_changes_needs_confirmation(win, put, wait_until, tmp_path):
+    put(("A1", "unsaved"))
+    wait_until(win.is_dirty)
+    answers = []
+    win._confirm_discard = lambda: answers.append(1) or False  # the user says "cancel"
+    win.new_file()
+    other = tmp_path / "o.sheet"
+    other.write_text('{"format":"sheet","version":1,"formats":["General"],"cells":[]}\n')
+    win.open_file(str(other))
+    QTest.qWait(100)
+    assert len(answers) == 2 and shown(win, "A1") == "unsaved"  # both refused
+    win._confirm_discard = lambda: True
+    win.new_file()
+    wait_until(lambda: shown(win, "A1") in ("", None))
+
+
+def test_closing_with_unsaved_changes_can_be_cancelled(engine, qapp, wait_until, call):
+    w = MainWindow(engine, interactive=False)
+    w.show()
+    call("edit", entries=[[0, 0, "x"]])
+    wait_until(w.is_dirty)
+    w._confirm_discard = lambda: False
+    assert w.close() is False
+    assert engine.alive
+    w._confirm_discard = lambda: True
+    assert w.close() is True
+    assert not engine.alive
+
+
+def test_csv_actions_are_separate_from_native_files(win, put, wait_until, tmp_path):
+    put(("A1", "1"), ("B1", "=A1+1"))
+    path = str(tmp_path / "x.csv")
+    win.save_csv(path, "raw")
+    wait_until(lambda: (tmp_path / "x.csv").exists())
+    assert win.current_path is None  # exporting CSV does not make it the document
+    assert "*" in win.windowTitle()  # and does not count as saving it

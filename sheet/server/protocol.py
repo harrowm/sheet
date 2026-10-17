@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from sheet.engine.csv_io import CsvError, export_csv, import_csv
+from sheet.engine.files import FileFormatError, load_sheet, save_sheet
 from sheet.engine.formats import FormatError, format_value
 from sheet.engine.graph import CycleError
 from sheet.engine.lexer import FormulaSyntaxError
@@ -114,6 +115,9 @@ class Session:
             "fill": self._fill,
             "undo": lambda r: self._changed(self.sheet.undo()),
             "redo": lambda r: self._changed(self.sheet.redo()),
+            "save": self._save,
+            "load": self._load,
+            "new": self._new,
             "import_csv": self._import_csv,
             "export_csv": self._export_csv,
             "shutdown": lambda r: {},
@@ -150,6 +154,8 @@ class Session:
             response = {"ok": False, "error": err}
         except FormatError as exc:
             response = {"ok": False, "error": {"kind": "format", "message": str(exc)}}
+        except FileFormatError as exc:
+            response = {"ok": False, "error": {"kind": "file", "message": str(exc)}}
         except OSError as exc:
             response = {"ok": False, "error": {"kind": "io", "message": str(exc)}}
         except (IndexError, ValueError) as exc:
@@ -302,6 +308,26 @@ class Session:
         raise _invalid("direction must be 'down' or 'right'")
 
     # --- files -------------------------------------------------------------------------
+
+    def _save(self, request: Request) -> Response:
+        path = _text(request, "path")
+        return {"cells": save_sheet(self.sheet, path), "path": path}
+
+    def _replace_sheet(self, sheet: Sheet) -> None:
+        """Swap in a new document. The old one is closed only after the new one exists."""
+        old, self.sheet = self.sheet, sheet
+        old.close()
+        self.version += 1
+
+    def _load(self, request: Request) -> Response:
+        path = _text(request, "path")
+        new = load_sheet(path)  # raises before anything is touched if the file is bad
+        self._replace_sheet(new)
+        return {"cells": len(new.store), "path": path, "reset": True}
+
+    def _new(self, request: Request) -> Response:
+        self._replace_sheet(Sheet())
+        return {"reset": True}
 
     def _import_csv(self, request: Request) -> Response:
         row, col = _pos(request, "at") if "at" in request else (0, 0)

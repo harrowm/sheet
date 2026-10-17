@@ -15,7 +15,7 @@ from typing import Self
 
 from sheet.engine.ast import Node
 from sheet.engine.cells import Cell, CellStore
-from sheet.engine.entry import parse_entry
+from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.evaluator import evaluate
 from sheet.engine.formats import GENERAL
 from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_references
@@ -169,6 +169,24 @@ class Sheet:
     def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> frozenset[Pos]:
         """Apply a display format to a rectangle as one transaction."""
         return self._commit(self.store.formatted_cells(r1, c1, r2, c2, fmt), recalculate=False)
+
+    def load_cells(self, items: Iterable[tuple[int, int, Entry, str]]) -> None:
+        """Fill the sheet from saved cells ``(row, col, entry, format)`` in one transaction.
+
+        Unlike typing, the saved format is used as is (a date is not re-detected), and the
+        recalculation covers every cell. Callers normally follow with ``clear_history``.
+        """
+        changes: dict[Pos, Cell | None] = {}
+        for row, col, entry, fmt in items:
+            if entry.text.strip():
+                changes[(row, col)] = Cell(entry.text, entry.ast, entry.value, fmt)
+            else:
+                changes[(row, col)] = None if fmt == GENERAL else Cell("", None, None, fmt)
+        self._commit(changes, recalculate=True)
+
+    def clear_history(self) -> None:
+        self._undo.clear()
+        self._redo.clear()
 
     # --- structural edits --------------------------------------------------------
 

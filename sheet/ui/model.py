@@ -138,6 +138,14 @@ class SheetModel(QAbstractTableModel):
             self._refetch.discard(key)
             self._fetch(key)
 
+    def reset_cache(self) -> None:
+        """Forget everything cached (a different document was loaded)."""
+        self.beginResetModel()
+        self._blocks.clear()
+        self._pending.clear()
+        self._refetch.clear()
+        self.endResetModel()
+
     def _invalidate(self, bounds: list[int] | None) -> None:
         """Refetch cached blocks that overlap ``bounds`` (the old data shows until then)."""
         if bounds is None:
@@ -158,7 +166,7 @@ class SheetModel(QAbstractTableModel):
     # --- requests that change the sheet ------------------------------------------------
 
     def send(
-        self, op: str, *, on_done: Callable[[dict[str, Any]], None] | None = None, **args: Any
+        self, op: str, *, on_done: Callable[[dict[str, Any]], object] | None = None, **args: Any
     ) -> None:
         """Send a request that may change cells; refresh and report when it is answered.
 
@@ -176,6 +184,10 @@ class SheetModel(QAbstractTableModel):
         if not response.get("ok"):
             err = response.get("error", {})
             self.error.emit(err.get("kind", "internal"), err.get("message", "request failed"))
+            return
+        if response.get("reset"):  # a whole new document: nothing cached is valid
+            self.reset_cache()
+            self.changed.emit(None)
             return
         bounds = response.get("bounds")
         self._invalidate(bounds)

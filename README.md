@@ -71,9 +71,19 @@ bottom-right of the status bar should read "Engine: free-threaded Python (GIL of
    - Delete clears the selection.
    - Select a column range and press Ctrl+D to fill down, or Ctrl+R to fill right.
 9. **Rows and columns:** right-click a row or column header to insert or delete.
-10. **CSV:** File > Save CSV (values or formulas) and File > Open CSV. Open imports at the
-    selected cell.
-11. **Calculating indicator:** edit a cell that many formulas depend on. The indicator only
+10. **Save and open:**
+    - Ctrl+S saves. The first time it asks for a name and adds `.sheet`.
+    - Ctrl+Shift+S saves under a new name, Ctrl+O opens a file, and Ctrl+N starts a new sheet.
+    - The title shows the file name, with a `*` when there are unsaved changes.
+    - New, Open and closing the window ask before throwing away unsaved changes.
+    - A saved file keeps formulas and formats. Reopening it recalculates everything and
+      starts with empty undo history.
+    - Open a hand-damaged file (for example, edit a `.sheet` file in a text editor and break
+      the JSON). You should get a red message, and your current sheet must stay untouched.
+11. **CSV:** File > Import CSV and File > Export CSV (values or formulas). Import fills in
+    from the selected cell. CSV is for exchanging data; it does not become the document
+    you save.
+12. **Calculating indicator:** edit a cell that many formulas depend on. The indicator only
     appears if the engine takes more than about 150 ms.
 
 ### Automated tests
@@ -93,5 +103,5 @@ bottom-right of the status bar should read "Engine: free-threaded Python (GIL of
 - **Using a different engine interpreter:** set `SHEET_ENGINE_PYTHON=/path/to/python3.14t`
   before `run.sh`.
 
-Known gaps: no cut/move, no drag-fill handle, no native save format (CSV only), and
-formatting an entire column is rejected.
+Known gaps: no cut/move, no drag-fill handle, column widths are not saved, and formatting an
+entire column is rejected.

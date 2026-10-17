@@ -158,25 +158,32 @@ class CellStore:
 
     def formatted_cells(
         self, r1: int, c1: int, r2: int, c2: int, fmt: str
-    ) -> dict[tuple[int, int], Cell]:
+    ) -> dict[tuple[int, int], Cell | None]:
         """The cells that would result from applying ``fmt`` to the rectangle.
 
-        Creates empty cells where none exist. Nothing is stored; raises FormatError for
-        an invalid format and ValueError if the rectangle is larger than
-        ``MAX_FORMAT_CELLS``.
+        Creates empty cells where none exist. An empty cell left with the General format
+        is the same as no cell, so it comes back as ``None`` (remove). Nothing is stored;
+        raises FormatError for an invalid format and ValueError if the rectangle is larger
+        than ``MAX_FORMAT_CELLS``.
         """
         self._check(r1, c1)
         self._check(r2, c2)
         validate_format(fmt)
         if (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_FORMAT_CELLS:
             raise ValueError(f"Range too large to format (limit {MAX_FORMAT_CELLS} cells)")
-        out: dict[tuple[int, int], Cell] = {}
+        out: dict[tuple[int, int], Cell | None] = {}
         for r in range(r1, r2 + 1):
             for c in range(c1, c2 + 1):
                 old = self._cells.get((r, c))
-                out[(r, c)] = Cell("", None, None, fmt) if old is None else replace(old, format=fmt)
+                new = Cell("", None, None, fmt) if old is None else replace(old, format=fmt)
+                blank = not new.text.strip() and new.value is None
+                out[(r, c)] = None if blank and fmt == GENERAL else new
         return out
 
     def set_format_range(self, r1: int, c1: int, r2: int, c2: int, fmt: str) -> None:
         """Apply ``fmt`` to every cell in the rectangle. All-or-nothing."""
-        self._cells.update(self.formatted_cells(r1, c1, r2, c2, fmt))
+        for pos, cell in self.formatted_cells(r1, c1, r2, c2, fmt).items():
+            if cell is None:
+                self._cells.pop(pos, None)
+            else:
+                self._cells[pos] = cell

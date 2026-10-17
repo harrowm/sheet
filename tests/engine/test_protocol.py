@@ -263,6 +263,66 @@ def test_fill_down_and_right(session):
     assert call(session, "fill", rect=[0, 0, 1, 1], direction="up")["error"]["kind"] == "invalid"
 
 
+# --- native files ------------------------------------------------------------------------------
+
+
+def test_save_and_load_replace_the_whole_sheet(session, tmp_path):
+    edit(session, 0, 0, "5")
+    edit(session, 0, 1, "=A1*2")
+    call(session, "format", rect=[0, 1, 0, 1], fmt="$#,##0.00")
+    path = str(tmp_path / "doc.sheet")
+    saved = call(session, "save", path=path)
+    assert saved["ok"] and saved["cells"] == 2
+
+    other = Session(workers=1)
+    other.handle({"op": "edit", "entries": [[9, 9, "will be replaced"]]})
+    before = other.handle({"op": "hello"})["version"]
+    loaded = other.handle({"op": "load", "path": path})
+    assert loaded["ok"] and loaded["reset"] is True and loaded["cells"] == 2
+    assert loaded["version"] > before
+    assert loaded["can_undo"] is False and loaded["can_redo"] is False
+    assert other.handle({"op": "cell", "at": [9, 9]})["text"] == ""
+    cell = other.handle({"op": "cell", "at": [0, 1]})
+    assert (cell["text"], cell["display"], cell["format"]) == ("=A1*2", "$10.00", "$#,##0.00")
+    other.handle({"op": "edit", "entries": [[0, 0, "7"]]})  # dependencies were rebuilt
+    assert other.handle({"op": "cell", "at": [0, 1]})["display"] == "$14.00"
+    other.close()
+
+
+def test_a_failed_load_changes_nothing(session, tmp_path):
+    edit(session, 0, 0, "keep")
+    version = call(session, "hello")["version"]
+    missing = call(session, "load", path=str(tmp_path / "nope.sheet"))
+    assert missing["error"]["kind"] == "io"
+    junk = tmp_path / "junk.sheet"
+    junk.write_text("not json")
+    bad = call(session, "load", path=str(junk))
+    assert bad["error"]["kind"] == "file" and "not a sheet file" in bad["error"]["message"]
+    loop = tmp_path / "loop.sheet"
+    loop.write_text(
+        '{"format":"sheet","version":1,"formats":["General"],"cells":[[0,0,"=B1"],[0,1,"=A1"]]}'
+    )
+    assert call(session, "load", path=str(loop))["error"]["kind"] == "circular"
+    assert call(session, "hello")["version"] == version
+    assert call(session, "cell", at=[0, 0])["text"] == "keep"
+    assert call(session, "undo")["changed"] == [[0, 0]]  # history intact
+
+
+def test_save_errors_are_reported(session, tmp_path):
+    resp = call(session, "save", path=str(tmp_path / "no" / "such" / "dir.sheet"))
+    assert resp["ok"] is False and resp["error"]["kind"] == "io"
+    assert call(session, "save")["error"]["kind"] == "invalid"
+
+
+def test_new_starts_an_empty_sheet_without_history(session):
+    edit(session, 0, 0, "1")
+    version = call(session, "hello")["version"]
+    resp = call(session, "new")
+    assert resp["ok"] and resp["reset"] is True and resp["version"] > version
+    assert resp["can_undo"] is False
+    assert call(session, "used_range")["range"] is None
+
+
 # --- csv and misc -----------------------------------------------------------------------
 
 

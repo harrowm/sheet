@@ -17,7 +17,7 @@ from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
 
 from sheet.ui.launcher import engine_command
 
-Callback = Callable[[dict[str, Any]], None]
+Callback = Callable[[dict[str, Any]], object]  # the return value is ignored
 
 
 def _engine_error(message: str) -> dict[str, Any]:

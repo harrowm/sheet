@@ -166,3 +166,37 @@ def test_flags_make_cells_editable_and_selectable(model):
     flags = model.flags(idx(model, 3, 3))
     assert flags & Qt.ItemFlag.ItemIsEditable
     assert flags & Qt.ItemFlag.ItemIsSelectable and flags & Qt.ItemFlag.ItemIsEnabled
+
+
+def test_loading_or_starting_a_document_resets_the_whole_cache(model, call, wait_until, tmp_path):
+    call("edit", entries=[[0, 0, "old"], [500, 500, "far"]])
+    shown(model, 0, 0)
+    shown(model, 500, 500)
+    wait_until(lambda: shown(model, 0, 0) == "old" and shown(model, 500, 500) == "far")
+    other = tmp_path / "o.sheet"
+    other.write_text('{"format":"sheet","version":1,"formats":["General"],"cells":[[0,0,"new"]]}\n')
+    resets = []
+    model.modelReset.connect(lambda: resets.append(model.cached_blocks))
+    model.send("load", path=str(other))
+    wait_until(lambda: resets)
+    assert resets == [0]  # the old document's blocks were dropped
+    wait_until(lambda: shown(model, 0, 0) == "new")
+    wait_until(lambda: shown(model, 500, 500) in ("", None))
+    resets.clear()
+    model.send("new")
+    wait_until(lambda: resets)
+    wait_until(lambda: shown(model, 0, 0) in ("", None))
+
+
+def test_a_failed_load_does_not_reset_the_cache(model, call, wait_until, tmp_path):
+    call("edit", entries=[[0, 0, "keep"]])
+    shown(model, 0, 0)
+    wait_until(lambda: shown(model, 0, 0) == "keep")
+    bad = tmp_path / "bad.sheet"
+    bad.write_text("junk")
+    resets, errors = [], []
+    model.modelReset.connect(lambda: resets.append(1))
+    model.error.connect(lambda kind, msg: errors.append(kind))
+    model.send("load", path=str(bad))
+    wait_until(lambda: errors == ["file"])
+    assert not resets and shown(model, 0, 0) == "keep"

@@ -6,9 +6,10 @@ the grid shows whatever the model has cached from it.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QModelIndex, QObject, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QEventLoop, QModelIndex, QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QKeyEvent, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -47,6 +48,14 @@ FORMATS = [
 ]
 
 Rect = tuple[int, int, int, int]
+
+FILE_FILTER = "Sheet files (*.sheet);;All files (*)"
+FILE_SUFFIX = ".sheet"
+
+
+def with_extension(path: str) -> str:
+    """Add ``.sheet`` to a name typed without any extension; keep an explicit one."""
+    return path if os.path.splitext(path)[1] else path + FILE_SUFFIX
 
 
 class CellDelegate(QStyledItemDelegate):
@@ -94,17 +103,19 @@ class MainWindow(QMainWindow):
         self.model = SheetModel(client, parent=self)
         self._copied: str | None = None  # text last copied inside the app (see paste)
         self._formula_dirty = False
+        self.current_path: str | None = None  # the document's file; None until saved or opened
+        self._saved_version = client.version  # engine version when last saved or loaded
         self._busy = False
         self._status_error = False
         self.actions_by_name: dict[str, QAction] = {}
 
-        self.setWindowTitle("Sheet")
         self.resize(1100, 700)
         self._build_widgets()
         self._build_actions()
         self._build_menus()
         self._connect()
         self._update_undo_actions()
+        self._update_title()
         if client.hello:
             self._on_ready(client.hello)
         self._refresh_bars()
@@ -173,14 +184,13 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         a = self._action
-        a("open", "&Open CSV…", self.open_csv_dialog, QKeySequence.StandardKey.Open)
-        a(
-            "save_values",
-            "Save CSV (&values)…",
-            lambda: self.save_csv_dialog("display"),
-            QKeySequence.StandardKey.Save,
-        )
-        a("save_raw", "Save CSV (&formulas)…", lambda: self.save_csv_dialog("raw"))
+        a("new", "&New", self.new_file, QKeySequence.StandardKey.New)
+        a("open_file", "&Open…", self.open_dialog, QKeySequence.StandardKey.Open)
+        a("save", "&Save", self.save_file, QKeySequence.StandardKey.Save)
+        a("save_as", "Save &As…", self.save_as_dialog, QKeySequence.StandardKey.SaveAs)
+        a("import_csv", "&Import CSV…", self.import_csv_dialog)
+        a("export_values", "Export CSV (&values)…", lambda: self.export_csv_dialog("display"))
+        a("export_raw", "Export CSV (&formulas)…", lambda: self.export_csv_dialog("raw"))
         a("quit", "&Quit", self.close, QKeySequence.StandardKey.Quit)
         a("undo", "&Undo", self.undo, QKeySequence.StandardKey.Undo)
         a("redo", "&Redo", self.redo, QKeySequence.StandardKey.Redo)
@@ -204,7 +214,10 @@ class MainWindow(QMainWindow):
         assert bar is not None
         file_menu, edit, fmt = bar.addMenu("&File"), bar.addMenu("&Edit"), bar.addMenu("F&ormat")
         assert file_menu is not None and edit is not None and fmt is not None
-        for n in ("open", "save_values", "save_raw"):
+        for n in ("new", "open_file", "save", "save_as"):
+            file_menu.addAction(names[n])
+        file_menu.addSeparator()
+        for n in ("import_csv", "export_values", "export_raw"):
             file_menu.addAction(names[n])
         file_menu.addSeparator()
         file_menu.addAction(names["quit"])
@@ -257,6 +270,8 @@ class MainWindow(QMainWindow):
         self.client.ready.connect(self._on_ready)
         self.client.failed.connect(self._on_engine_failed)
         self.client.state_changed.connect(self._update_undo_actions)
+        self.client.state_changed.connect(self._update_title)
+        self.model.modelReset.connect(self._on_model_reset)
         self.client.busy_changed.connect(self._on_busy)
 
     # --- status ------------------------------------------------------------------------
@@ -314,10 +329,11 @@ class MainWindow(QMainWindow):
             "syntax": f"Syntax error in formula: {message}",
             "circular": "Circular reference: that edit would make a cell depend on itself",
             "format": f"Invalid format: {message}",
+            "file": f"Not a valid sheet file: {message}",
             "engine": f"Engine error: {message}",
         }.get(kind, message)
         self.show_message(text, error=True)
-        if self.interactive and kind in ("csv", "io"):
+        if self.interactive and kind in ("csv", "io", "file"):
             QMessageBox.warning(self, "Sheet", message)
 
     # --- cursor, name box and formula bar ----------------------------------------------
@@ -462,17 +478,120 @@ class MainWindow(QMainWindow):
         else:
             self.model.send(op, at=c1, count=c2 - c1 + 1)
 
-    # --- files -------------------------------------------------------------------------
+    # --- documents ---------------------------------------------------------------------
 
-    def open_csv_dialog(self) -> None:
+    def is_dirty(self) -> bool:
+        """True if the engine's document has changed since it was last saved or loaded."""
+        return self.client.version != self._saved_version
+
+    def _update_title(self) -> None:
+        name = os.path.basename(self.current_path) if self.current_path else "Untitled"
+        self.setWindowTitle(f"{name}{' *' if self.is_dirty() else ''} - Sheet")
+
+    def _on_model_reset(self) -> None:
+        self._formula_dirty = False
+        self.view.setCurrentIndex(self.model.index(0, 0))
+        self._refresh_bars()
+
+    def _confirm_discard(self) -> bool:
+        """Ask before throwing away unsaved changes. False means the user cancelled."""
+        if not self.is_dirty() or not self.interactive:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("This document has unsaved changes.")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        choice = box.exec()
+        if choice == QMessageBox.StandardButton.Save:
+            return self._save_and_wait()
+        return choice == QMessageBox.StandardButton.Discard
+
+    def _save_and_wait(self) -> bool:
+        """Save now, running a local event loop until the engine answers."""
+        path = self.current_path
+        if path is None:
+            chosen, _ = QFileDialog.getSaveFileName(self, "Save", "", FILE_FILTER)
+            if not chosen:
+                return False
+            path = with_extension(chosen)
+        loop, result = QEventLoop(self), []
+
+        def done(response: dict[str, Any]) -> None:
+            result.append(self._saved(path, response))
+            loop.quit()
+
+        self.client.request("save", done, path=path)
+        loop.exec()
+        return bool(result and result[0])
+
+    def new_file(self) -> None:
+        if not self._confirm_discard():
+            return
+        self.model.send("new", on_done=lambda response: self._document_replaced(None, response))
+
+    def open_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open", "", FILE_FILTER)
+        if path:
+            self.open_file(path)
+
+    def open_file(self, path: str) -> None:
+        if not self._confirm_discard():
+            return
+
+        def done(response: dict[str, Any]) -> None:
+            if self._document_replaced(path, response):
+                self.show_message(f"Opened {path} ({response['cells']} cells)")
+
+        self.model.send("load", on_done=done, path=path)
+
+    def _document_replaced(self, path: str | None, response: dict[str, Any]) -> bool:
+        if not response.get("ok"):
+            return False  # the model has reported the error; the old document is untouched
+        self.current_path = path
+        self._saved_version = response["version"]
+        self._update_title()
+        return True
+
+    def save_as_dialog(self) -> None:
+        if not self.interactive:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save As", self.current_path or "", FILE_FILTER)
+        if path:
+            self.save_file(with_extension(path))
+
+    def save_file(self, path: str | None = None) -> None:
+        """Save to ``path``, or to the document's file; ask for a name if it has none."""
+        path = path or self.current_path
+        if path is None:
+            self.save_as_dialog()
+            return
+        self.client.request("save", lambda response: self._saved(path, response), path=path)
+
+    def _saved(self, path: str, response: dict[str, Any]) -> bool:
+        if not response.get("ok"):
+            self._report_error(response["error"]["kind"], response["error"]["message"])
+            return False
+        self.current_path = path
+        self._saved_version = response["version"]
+        self._update_title()
+        self.show_message(f"Saved {response['cells']} cells to {path}")
+        return True
+
+    # --- csv ---------------------------------------------------------------------------
+
+    def import_csv_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open CSV", "", "CSV files (*.csv);;All files (*)"
+            self, "Import CSV", "", "CSV files (*.csv);;All files (*)"
         )
         if path:
             self.open_csv(path)
 
-    def save_csv_dialog(self, mode: str) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV files (*.csv)")
+    def export_csv_dialog(self, mode: str) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "", "CSV files (*.csv)")
         if path:
             self.save_csv(path, mode)
 
@@ -488,7 +607,7 @@ class MainWindow(QMainWindow):
     def save_csv(self, path: str, mode: str = "display") -> None:
         def done(response: dict[str, Any]) -> None:
             if response.get("ok"):
-                self.show_message(f"Saved {response['rows']} rows to {path}")
+                self.show_message(f"Exported {response['rows']} rows to {path}")
             else:
                 self._report_error(response["error"]["kind"], response["error"]["message"])
 
@@ -497,6 +616,10 @@ class MainWindow(QMainWindow):
     # --- closing -----------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
+        if not self._confirm_discard():
+            if event is not None:
+                event.ignore()
+            return
         self.client.shutdown()
         if event is not None:
             event.accept()
