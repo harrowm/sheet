@@ -76,17 +76,19 @@ def test_create_window_reports_an_engine_that_cannot_start(qapp, monkeypatch):
     assert len(shown) == 1 and "engine" in shown[0].lower()
 
 
-def test_the_unprotected_default_really_does_abort_and_the_hook_prevents_it(tmp_path):
+def test_a_failing_slot_does_not_kill_a_real_process_when_the_hook_is_installed(tmp_path):
+    # Without the hook PyQt6 aborts the process (SIGABRT, exit 134: measured, entry 126). That
+    # half is deliberately NOT tested here: crashing a subprocess on every run makes macOS
+    # log a crash report and pop up "Python quit unexpectedly" each time.
     script = tmp_path / "slot.py"
     script.write_text(
         "import os, sys\n"
         "os.environ['QT_QPA_PLATFORM'] = 'offscreen'\n"
         "from PyQt6.QtCore import QObject, QTimer, pyqtSignal\n"
         "from PyQt6.QtWidgets import QApplication\n"
+        "import sheet.ui.__main__ as m\n"
         "app = QApplication([])\n"
-        "if sys.argv[1] == 'hook':\n"
-        "    import sheet.ui.__main__ as m\n"
-        "    m.install_excepthook(lambda: None)\n"
+        "m.install_excepthook(lambda: None)\n"
         "class E(QObject):\n"
         "    ping = pyqtSignal()\n"
         "e = E()\n"
@@ -96,11 +98,11 @@ def test_the_unprotected_default_really_does_abort_and_the_hook_prevents_it(tmp_
         "QTimer.singleShot(300, app.quit)\n"
         "sys.exit(app.exec())\n"
     )
-    for mode, expect_alive in (("plain", False), ("hook", True)):
-        done = subprocess.run(
-            [sys.executable, str(script), mode], capture_output=True, timeout=60, check=False
-        )
-        assert (done.returncode == 0) is expect_alive, (mode, done.returncode, done.stderr[-300:])
+    done = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, timeout=60, check=False
+    )
+    assert done.returncode == 0, done.stderr[-300:]
+    assert b"RuntimeError: boom" in done.stderr  # the traceback was logged, not swallowed
 
 
 def sheet_server_pids():
