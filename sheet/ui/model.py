@@ -10,15 +10,18 @@ engine, and the blocks that contain changed cells are refetched.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 
-from sheet.ui.client import EngineClient
 from sheet.ui.names import MAX_COLS, MAX_ROWS, column_name
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sheet.ui.client import EngineClient
 
 BLOCK_ROWS = 64
 BLOCK_COLS = 16

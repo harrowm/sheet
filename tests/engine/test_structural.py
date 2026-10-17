@@ -6,29 +6,7 @@ from sheet.engine.cells import MAX_COLS, MAX_ROWS
 from sheet.engine.graph import CycleError, extract_references
 from sheet.engine.sheet import Sheet
 from sheet.engine.values import ErrorKind, ErrorValue
-
-
-def c(name: str) -> tuple[int, int]:
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
-
-
-def put(s: Sheet, name: str, text: str):
-    return s.set_entry(*c(name), text)
-
-
-def val(s: Sheet, name: str):
-    return s.get(*c(name))
-
-
-def text(s: Sheet, name: str):
-    cell = s.store.get_cell(*c(name))
-    return None if cell is None else cell.text
-
-
-def state(s: Sheet):
-    cells = {pos: (cell.text, cell.value, cell.format) for pos, cell in s.store.items()}
-    graph = {pos: s.graph.dependencies(pos) for pos, _ in s.store.items()}
-    return cells, graph
+from tests.engine.helpers import c, full_state, put, text, val
 
 
 def column_sheet() -> Sheet:
@@ -139,14 +117,14 @@ def test_insert_and_delete_columns():
 
 def test_structural_edit_is_one_undo_step():
     s = column_sheet()
-    before = state(s)
+    before = full_state(s)
     s.insert_rows(1)
     s.undo()
-    assert state(s) == before
+    assert full_state(s) == before
     s.redo()
     assert text(s, "B1") == "=SUM(A1:A4)"
     s.undo()
-    assert state(s) == before
+    assert full_state(s) == before
     put(s, "A1", "10")  # graph is intact after the undo
     assert val(s, "B1") == 15.0
 
@@ -155,10 +133,10 @@ def test_delete_is_undoable_including_values_and_formulas():
     s = Sheet()
     put(s, "A2", "5")
     put(s, "B1", "=A2+1")
-    before = state(s)
+    before = full_state(s)
     s.delete_rows(1)
     s.undo()
-    assert state(s) == before
+    assert full_state(s) == before
     put(s, "A2", "7")
     assert val(s, "B1") == 8.0
 
@@ -166,10 +144,10 @@ def test_delete_is_undoable_including_values_and_formulas():
 def test_insert_that_would_push_cells_off_the_grid_is_rejected():
     s = Sheet()
     s.set_entry(MAX_ROWS - 1, 0, "1")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(ValueError):
         s.insert_rows(0)
-    assert state(s) == before
+    assert full_state(s) == before
     s.set_entry(0, MAX_COLS - 1, "1")
     with pytest.raises(ValueError):
         s.insert_cols(0)
@@ -185,9 +163,9 @@ def test_invalid_structural_arguments(at, count):
 
 def test_delete_beyond_used_area_is_a_no_op():
     s = column_sheet()
-    before = state(s)
+    before = full_state(s)
     assert s.delete_rows(100, 5) == frozenset()
-    assert state(s) == before
+    assert full_state(s) == before
     assert s.undo() != frozenset()  # the previous (real) edit is still the top of history
 
 
@@ -231,11 +209,11 @@ def test_paste_is_one_undo_step():
     s = Sheet()
     put(s, "A1", "1")
     put(s, "A2", "2")
-    before = state(s)
+    before = full_state(s)
     s.paste(s.copy(*c("A1"), *c("A2")), *c("C1"))
     assert len(s.store) == 4
     s.undo()
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 def test_paste_over_the_source_uses_a_snapshot():
@@ -253,10 +231,10 @@ def test_paste_off_the_grid_is_rejected_without_changes():
     put(s, "A1", "1")
     put(s, "A2", "2")
     clip = s.copy(*c("A1"), *c("A2"))
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(ValueError):
         s.paste(clip, MAX_ROWS - 1, 0)
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 def test_relative_reference_pasted_off_the_grid_becomes_ref_error():
@@ -291,10 +269,10 @@ def test_paste_cycle_is_rejected_atomically():
     put(s, "A2", "=B1")
     put(s, "B1", "1")
     put(s, "C1", "=B2")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(CycleError):
         s.paste(s.copy(*c("C1"), *c("C1")), *c("B1"))  # B1 becomes "=A2", and A2 is "=B1"
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 def test_fill_down_and_right():
@@ -314,11 +292,11 @@ def test_fill_down_and_right():
 def test_fill_is_a_single_undo_step_and_constants_are_copied():
     s = Sheet()
     put(s, "A1", "7")
-    before = state(s)
+    before = full_state(s)
     s.fill_down(*c("A1"), *c("A4"))
     assert [val(s, f"A{i}") for i in range(1, 5)] == [7.0] * 4
     s.undo()
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 # --- randomised consistency -----------------------------------------------------------------
@@ -371,7 +349,7 @@ def check_consistent(s: Sheet):
 def test_random_structural_operations_keep_graph_and_values_consistent(ops):
     s = Sheet()
     for op in ops:
-        before = state(s)
+        before = full_state(s)
         try:
             match op[0]:
                 case "set":
@@ -386,5 +364,5 @@ def test_random_structural_operations_keep_graph_and_values_consistent(ops):
                 case name:
                     getattr(s, name)(op[1], op[2])
         except CycleError, ValueError:
-            assert state(s) == before
+            assert full_state(s) == before
         check_consistent(s)

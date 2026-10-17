@@ -114,7 +114,7 @@ class EngineClient(QObject):
         try:
             response = json.loads(line)
         except json.JSONDecodeError:
-            print(f"engine sent invalid JSON: {line[:200]!r}", file=sys.stderr)
+            sys.stderr.write(f"engine sent invalid JSON: {line[:200]!r}\n")
             return
         self._track_state(response)
         callback = self._pending.pop(response.get("id"), None)

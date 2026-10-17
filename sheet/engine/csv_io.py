@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import csv
 import os
-from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Literal, TextIO, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TextIO, cast
 
 from sheet.engine.address import cell_name
 from sheet.engine.entry import Entry, parse_entry
 from sheet.engine.formats import format_value
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
-from sheet.engine.sheet import Pos, Sheet
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sheet.engine.sheet import Pos, Sheet
 
 Source = str | os.PathLike[str] | TextIO
 
@@ -37,8 +41,8 @@ class CsvError(ValueError):
 @contextmanager
 def _text(source: Source, mode: str, encoding: str) -> Iterator[TextIO]:
     if isinstance(source, str | os.PathLike):
-        with open(source, mode, encoding=encoding, newline="") as f:
-            yield cast(TextIO, f)
+        with Path(source).open(mode, encoding=encoding, newline="") as f:
+            yield cast("TextIO", f)
     else:
         yield source
 

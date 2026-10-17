@@ -10,6 +10,7 @@ import sheet.engine.sheet as sheet_module
 from sheet.engine.graph import CycleError, DependencyGraph, RecalcPlan
 from sheet.engine.recalc import AtomicCounter, ParallelRecalculator
 from sheet.engine.sheet import Sheet
+from tests.engine.helpers import c
 
 
 def make_plan(preds: dict[int, list[int]]) -> RecalcPlan:
@@ -217,10 +218,6 @@ def test_parallel_values_match_sequential_for_random_dags(dag):
 
 
 # --- integration with Sheet ---------------------------------------------------------------
-
-
-def c(name: str) -> tuple[int, int]:
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
 
 
 def test_sheet_parallel_recalculation_matches_sequential():

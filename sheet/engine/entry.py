@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import math
-import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sheet.engine.ast import Literal, Node
 from sheet.engine.compiler import compile_formula
 from sheet.engine.dates import parse_date_text
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.limits import MAX_FORMULA_LENGTH
-from sheet.engine.values import Value
+from sheet.engine.values import parse_number
 
-_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
+if TYPE_CHECKING:
+    from sheet.engine.values import Value
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +45,8 @@ def parse_entry(text: str, enforce_limits: bool = True) -> Entry:
         return Entry(text, ast, value, None)
     if stripped.startswith("'"):
         return Entry(text, None, stripped[1:], None)
-    if _NUMBER.fullmatch(stripped) and math.isfinite(number := float(stripped)):
-        return Entry(text, None, number + 0.0, None)  # (beyond float range stays text; -0 is 0)
+    if (number := parse_number(stripped)) is not None:
+        return Entry(text, None, number + 0.0, None)  # (-0 is 0)
     if stripped.upper() in ("TRUE", "FALSE"):
         return Entry(text, None, stripped.upper() == "TRUE", None)
     if (date := parse_date_text(stripped)) is not None:

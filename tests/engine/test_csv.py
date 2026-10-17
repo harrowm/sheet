@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import io
 
@@ -9,14 +10,7 @@ from sheet.engine.cells import MAX_COLS, MAX_ROWS
 from sheet.engine.csv_io import CsvError, export_csv, import_csv
 from sheet.engine.graph import CycleError
 from sheet.engine.sheet import Sheet
-
-
-def c(name: str) -> tuple[int, int]:
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
-
-
-def put(s: Sheet, name: str, text: str):
-    return s.set_entry(*c(name), text)
+from tests.engine.helpers import c, cell_state, put
 
 
 def exported(s: Sheet, **kw) -> list[list[str]]:
@@ -29,10 +23,6 @@ def imported(text: str, **kw) -> Sheet:
     s = Sheet()
     import_csv(s, io.StringIO(text), **kw)
     return s
-
-
-def state(s: Sheet):
-    return {pos: (cell.text, cell.value, cell.format) for pos, cell in s.store.items()}
 
 
 # --- export ------------------------------------------------------------------------------
@@ -181,10 +171,10 @@ def test_empty_fields_clear_existing_cells_but_nothing_outside_the_data():
 def test_import_is_one_undo_step():
     s = Sheet()
     put(s, "A1", "old")
-    before = state(s)
+    before = cell_state(s)
     import_csv(s, io.StringIO("1,2\n3,=A1+B1\n"))
     s.undo()
-    assert state(s) == before
+    assert cell_state(s) == before
     s.redo()
     assert s.get(1, 0) == 3.0
 
@@ -192,12 +182,12 @@ def test_import_is_one_undo_step():
 def test_malformed_formula_is_reported_with_its_position_and_changes_nothing():
     s = Sheet()
     put(s, "A1", "keep")
-    before = state(s)
+    before = cell_state(s)
     with pytest.raises(CsvError) as info:
         import_csv(s, io.StringIO("1,2\n3,=1+\n"))
     assert (info.value.row, info.value.col) == (1, 1)
     assert "B2" in str(info.value)
-    assert state(s) == before
+    assert cell_state(s) == before
 
 
 def test_malformed_formula_can_be_kept_as_text():
@@ -209,10 +199,10 @@ def test_malformed_formula_can_be_kept_as_text():
 def test_circular_references_in_the_file_are_rejected_atomically():
     s = Sheet()
     put(s, "Z1", "keep")
-    before = state(s)
+    before = cell_state(s)
     with pytest.raises(CycleError):
         import_csv(s, io.StringIO("=B1,=A1\n"))
-    assert state(s) == before
+    assert cell_state(s) == before
 
 
 def test_import_beyond_the_grid_is_rejected():
@@ -276,10 +266,8 @@ TEXTS = [
 def test_raw_export_then_import_reproduces_the_sheet(edits):
     src = Sheet()
     for r, k, text in edits:
-        try:
+        with contextlib.suppress(CycleError):
             src.set_entry(r, k, text)
-        except CycleError:
-            pass
     out = io.StringIO()
     export_csv(src, out, mode="raw")
     dst = Sheet()

@@ -10,6 +10,7 @@ from sheet.engine.graph import CycleError
 from sheet.engine.parser import parse
 from sheet.engine.refs import REACH_SHIFT, reach
 from sheet.engine.sheet import Sheet
+from tests.engine.helpers import exact_state
 
 MASK = (1 << REACH_SHIFT) - 1
 
@@ -67,10 +68,6 @@ def _build(seed: int) -> Sheet:
     return sheet
 
 
-def _state(sheet: Sheet):
-    return {pos: (c.text, c.ast, c.value, c.format) for pos, c in sheet.store.items()}
-
-
 @pytest.mark.parametrize("seed", range(40))
 def test_skipping_unreaching_formulas_gives_the_same_result_as_rewriting_all(seed, monkeypatch):
     rnd = random.Random(seed + 1000)
@@ -91,8 +88,8 @@ def test_skipping_unreaching_formulas_gives_the_same_result_as_rewriting_all(see
     monkeypatch.undo()
     for name, at, count in ops:
         getattr(fast, name)(at, count)
-    assert _state(fast) == _state(slow)
+    assert exact_state(fast) == exact_state(slow)
     for _ in ops:  # and undo walks both back identically
         fast.undo()
         slow.undo()
-    assert _state(fast) == _state(slow)
+    assert exact_state(fast) == exact_state(slow)

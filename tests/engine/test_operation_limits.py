@@ -9,10 +9,7 @@ import sheet.server.protocol as protocol_module
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.sheet import Sheet
 from sheet.server.protocol import Session
-
-
-def state(s: Sheet):
-    return {pos: (c.text, c.value, c.format) for pos, c in s.store.items()}
+from tests.engine.helpers import cell_state
 
 
 def test_the_limit_is_250000_cells():
@@ -35,10 +32,10 @@ def test_fill_down_at_the_limit_works_and_one_over_is_rejected_without_changes(s
     assert s.store.get_cell(100, 0).text == "=B101"
     s2 = Sheet(workers=1)
     s2.set_entry(0, 0, "=B1")
-    before = state(s2)
+    before = cell_state(s2)
     with pytest.raises(ValueError, match="100 cells"):
         s2.fill_down(0, 0, 101, 0)
-    assert state(s2) == before
+    assert cell_state(s2) == before
 
 
 def test_fill_right_counts_the_populated_cells_it_would_write(small_limit):
@@ -76,10 +73,10 @@ def test_paste_of_a_large_copy_is_rejected_and_small_ones_work(small_limit):
     s.paste(clip, 0, 1)  # 100 cells: allowed
     s.set_entry(100, 0, "one more")
     big = s.copy(0, 0, 100, 0)  # 101 cells
-    before = state(s)
+    before = cell_state(s)
     with pytest.raises(ValueError, match="100 cells"):
         s.paste(big, 0, 3)
-    assert state(s) == before
+    assert cell_state(s) == before
 
 
 def test_copying_is_not_limited_only_pasting():

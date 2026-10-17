@@ -24,7 +24,8 @@ def fold_constants(node: Node) -> Node:
     if not foldable:
         return node
     value = evaluate(node, NO_CELLS)
-    assert value is not None  # constant expressions never produce an empty value
+    if value is None:  # constant expressions never produce an empty value
+        raise AssertionError("a constant expression evaluated to an empty value")
     return Literal(value)
 
 

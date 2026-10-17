@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import sys
 import traceback
-from collections.abc import Callable
-from types import TracebackType
+from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from sheet.ui.client import EngineClient
 from sheet.ui.window import MainWindow
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import TracebackType
 
 
 def show_startup_error(message: str) -> None:

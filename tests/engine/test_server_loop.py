@@ -100,7 +100,7 @@ def test_stray_prints_go_to_stderr_not_the_protocol_stream(monkeypatch, capsys):
     real = Session.handle
 
     def noisy(self, request):
-        print("a stray print while handling a request")
+        print("a stray print while handling a request")  # noqa: T201 - the stray output is the test
         return real(self, request)
 
     monkeypatch.setattr(Session, "handle", noisy)

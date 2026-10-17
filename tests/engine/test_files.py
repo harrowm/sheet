@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 
@@ -9,18 +10,7 @@ from sheet.engine.cells import MAX_COLS, MAX_ROWS
 from sheet.engine.files import FILE_VERSION, FileFormatError, load_sheet, save_sheet
 from sheet.engine.graph import CycleError
 from sheet.engine.sheet import Sheet
-
-
-def c(name: str) -> tuple[int, int]:
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
-
-
-def put(s: Sheet, name: str, text: str):
-    return s.set_entry(*c(name), text)
-
-
-def state(s: Sheet):
-    return {pos: (cell.text, cell.value, cell.format) for pos, cell in s.store.items()}
+from tests.engine.helpers import c, cell_state, put
 
 
 def write(tmp_path, content, name="x.sheet"):
@@ -102,7 +92,7 @@ def test_round_trip_keeps_text_values_formats_and_recalculates_formulas(tmp_path
     s.set_format_range(*c("B1"), *c("B1"), "$#,##0.00")
     save_sheet(s, tmp_path / "a.sheet")
     loaded = load_sheet(tmp_path / "a.sheet")
-    assert state(loaded) == state(s)
+    assert cell_state(loaded) == cell_state(s)
     put(loaded, "A1", "10")  # the dependency graph was rebuilt, not just the values
     assert loaded.get(*c("B1")) == 20.0 and loaded.get(*c("B2")) == 36.0
 
@@ -261,16 +251,14 @@ FORMATS = ["General", "0.00", "$#,##0.00", "DD/MM/YYYY", "0%"]
 def test_random_sheets_round_trip_exactly(tmp_path_factory, edits, formats):
     s = Sheet()
     for r, k, text in edits:
-        try:
+        with contextlib.suppress(CycleError):
             s.set_entry(r, k, text)
-        except CycleError:
-            pass
     for r, k, fmt in formats:
         s.set_format_range(r, k, r, k, fmt)
     path = tmp_path_factory.mktemp("rt") / "r.sheet"
     save_sheet(s, path)
     loaded = load_sheet(path)
-    assert state(loaded) == state(s)
+    assert cell_state(loaded) == cell_state(s)
     assert {p: x.ast for p, x in loaded.store.items()} == {p: x.ast for p, x in s.store.items()}
 
 

@@ -10,6 +10,7 @@ from sheet.engine.files import FileFormatError, load_sheet, save_sheet
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.limits import MAX_FORMULA_LENGTH, MAX_NESTING
 from sheet.engine.sheet import PARALLEL_PARSE_MIN, Sheet
+from tests.engine.helpers import exact_state
 
 BIG = PARALLEL_PARSE_MIN * 3  # enough entries for several chunks
 
@@ -18,15 +19,11 @@ def _entries(n: int = BIG):
     return [(r, 0, str(r)) for r in range(n)] + [(r, 1, f"=A{r + 1}*2+1") for r in range(n)]
 
 
-def _state(sheet: Sheet):
-    return {pos: (c.text, c.ast, c.value, c.format) for pos, c in sheet.store.items()}
-
-
 def test_a_big_batch_gives_the_same_cells_as_one_thread():
     one, many = Sheet(workers=1), Sheet(workers=4)
     one.set_entries(_entries())
     many.set_entries(_entries())
-    assert _state(one) == _state(many)
+    assert exact_state(one) == exact_state(many)
     assert many.get(BIG - 1, 1) == (BIG - 1) * 2 + 1
     one.close()
     many.close()
@@ -91,7 +88,7 @@ def test_csv_import_matches_one_thread_and_text_mode_keeps_bad_formulas(tmp_path
     one, many = Sheet(workers=1), Sheet(workers=4)
     import_csv(one, path, bad_formulas="text")
     import_csv(many, path, bad_formulas="text")
-    assert _state(one) == _state(many)
+    assert exact_state(one) == exact_state(many)
     assert many.get(BIG // 2, 1) == "=1+"
     one.close()
     many.close()
@@ -103,7 +100,7 @@ def test_load_matches_one_thread_and_reports_the_first_problem_in_file_order(tmp
     path = tmp_path / "big.sheet"
     save_sheet(source, path)
     one, many = load_sheet(path, workers=1), load_sheet(path, workers=4)
-    assert _state(one) == _state(many) == _state(source)
+    assert exact_state(one) == exact_state(many) == exact_state(source)
     for s in (source, one, many):
         s.close()
 

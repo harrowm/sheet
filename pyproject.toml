@@ -10,7 +10,7 @@ dependencies = []
 ui = ["PyQt6>=6.7"]
 
 [dependency-groups]
-dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.17", "mypy>=1.11"]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,8 +33,28 @@ target-version = "py314"
 python_version = "3.14"
 strict = true
 
+[tool.ruff.lint]
+# Ruff's built-in default rules stay on; these families are added to them.
+extend-select = [
+    "ARG",  # unused arguments
+    "C90",  # function complexity
+    "N",  # naming
+    "PERF",  # performance anti-patterns
+    "PTH",  # pathlib instead of os.path
+    "S",  # security
+    "SIM105",  # contextlib.suppress instead of try/except/pass
+    "T20",  # no print
+    "TC",  # imports used only for typing go under TYPE_CHECKING
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["C408"]
+"tests/**" = ["C408", "S101", "S108", "S311", "S603", "S607", "ARG001", "ARG002", "ARG005", "N806", "PTH"]
+"benchmarks/**" = ["T20"]  # command-line programs print their results
+"scripts/**" = ["T20"]
+"sheet/ui/**" = ["N802", "N803", "ARG002", "ARG005"]  # Qt dictates method names and slot signatures
 
 # PyQt6's type stubs mark many getters (menuBar(), selectionModel(), clipboard()) as possibly
 # None; checking each would only add noise, so that one error code is off for the UI.

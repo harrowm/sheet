@@ -6,8 +6,8 @@ the grid shows whatever the model has cached from it.
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import (
     QEvent,
@@ -38,9 +38,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from sheet.ui.client import EngineClient
 from sheet.ui.model import SheetModel
 from sheet.ui.names import cell_name, parse_cell_name
+
+if TYPE_CHECKING:
+    from sheet.ui.client import EngineClient
 
 BUSY_DELAY_MS = 150  # show "Calculating..." only if the engine takes longer than this
 MESSAGE_MS = 8000
@@ -64,9 +66,16 @@ FILE_FILTER = "Sheet files (*.sheet);;All files (*)"
 FILE_SUFFIX = ".sheet"
 
 
+def _qt[T](value: T | None) -> T:
+    """Qt's type stubs make objects that always exist optional; fail clearly if one is missing."""
+    if value is None:
+        raise RuntimeError("Qt returned no object")
+    return value
+
+
 def with_extension(path: str) -> str:
     """Add ``.sheet`` to a name typed without any extension; keep an explicit one."""
-    return path if os.path.splitext(path)[1] else path + FILE_SUFFIX
+    return path if Path(path).suffix else path + FILE_SUFFIX
 
 
 class CellDelegate(QStyledItemDelegate):
@@ -235,10 +244,8 @@ class MainWindow(QMainWindow):
 
     def _build_menus(self) -> None:
         names = self.actions_by_name
-        bar = self.menuBar()
-        assert bar is not None
-        file_menu, edit, fmt = bar.addMenu("&File"), bar.addMenu("&Edit"), bar.addMenu("F&ormat")
-        assert file_menu is not None and edit is not None and fmt is not None
+        bar = _qt(self.menuBar())
+        file_menu, edit, fmt = (_qt(bar.addMenu(title)) for title in ("&File", "&Edit", "F&ormat"))
         for n in ("new", "open_file", "save", "save_as"):
             file_menu.addAction(names[n])
         file_menu.addSeparator()
@@ -271,9 +278,7 @@ class MainWindow(QMainWindow):
         for n in ("insert_rows", "delete_rows", "insert_cols", "delete_cols"):
             menu.addAction(names[n])
         menu.addSeparator()
-        sub = menu.addMenu("Format")
-        assert sub is not None
-        self._add_format_menu(sub)
+        self._add_format_menu(_qt(menu.addMenu("Format")))
         return menu
 
     def _show_context_menu_at_header(self, pos: QPoint) -> None:
@@ -544,7 +549,7 @@ class MainWindow(QMainWindow):
         return self.client.version != self._saved_version
 
     def _update_title(self) -> None:
-        name = os.path.basename(self.current_path) if self.current_path else "Untitled"
+        name = Path(self.current_path).name if self.current_path else "Untitled"
         self.setWindowTitle(f"{name}{' *' if self.is_dirty() else ''} - Sheet")
 
     def _on_model_reset(self) -> None:

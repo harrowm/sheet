@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import sys
 from array import array
-from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
-from sheet.engine.ast import Node
-from sheet.engine.entry import Entry
 from sheet.engine.formats import GENERAL, validate_format
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.values import ErrorValue, Value
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from sheet.engine.ast import Node
+    from sheet.engine.entry import Entry
 
 MAX_FORMAT_CELLS = 1_000_000  # largest area a format change may materialise
 

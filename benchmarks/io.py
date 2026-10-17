@@ -19,14 +19,18 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sheet.engine.csv_io import export_csv, import_csv
 from sheet.engine.files import load_sheet, save_sheet
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.sheet import Sheet
-from sheet.engine.values import Value
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sheet.engine.values import Value
 
 
 def entries(rows: int) -> list[tuple[int, int, str]]:

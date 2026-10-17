@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-import re
-from collections.abc import Callable, Iterable, Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from sheet.engine.ast import BinaryOp, CellRef, FuncCall, Literal, Node, RangeRef, UnaryOp
-from sheet.engine.values import ErrorKind, ErrorValue, Value
+from sheet.engine.values import ErrorKind, ErrorValue, Value, parse_number
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Sequence
 
 
 class RangeSnapshotLike(Protocol):
@@ -20,13 +21,13 @@ class RangeSnapshotLike(Protocol):
 
 
 class CellReader(Protocol):
-    def get(self, row: int, col: int) -> Value: ...
+    def get(self, row: int, col: int, /) -> Value: ...
 
-    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int) -> RangeSnapshotLike | None:
+    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int, /) -> RangeSnapshotLike | None:
         """Pre-packed numbers for a rectangle, if the reader has them (else None)."""
         ...
 
-    def range_values(self, r1: int, c1: int, r2: int, c2: int) -> Iterable[Value]:
+    def range_values(self, r1: int, c1: int, r2: int, c2: int, /) -> Iterable[Value]:
         """Values of the *populated* cells in the inclusive rectangle."""
         ...
 
@@ -34,19 +35,18 @@ class CellReader(Protocol):
 class _NoCells:
     """Reader with no cells, used when folding constants."""
 
-    def get(self, row: int, col: int) -> Value:
+    def get(self, _row: int, _col: int, /) -> Value:
         return None
 
-    def range_values(self, r1: int, c1: int, r2: int, c2: int) -> Iterable[Value]:
+    def range_values(self, _r1: int, _c1: int, _r2: int, _c2: int, /) -> Iterable[Value]:
         return ()
 
-    def range_snapshot(self, r1: int, c1: int, r2: int, c2: int) -> RangeSnapshotLike | None:
+    def range_snapshot(self, _r1: int, _c1: int, _r2: int, _c2: int, /) -> RangeSnapshotLike | None:
         return None
 
 
 NO_CELLS: CellReader = _NoCells()
 
-_NUMERIC_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
 _VALUE = ErrorValue(ErrorKind.VALUE)
 _DIV0 = ErrorValue(ErrorKind.DIV0)
 _NUM = ErrorValue(ErrorKind.NUM)
@@ -82,10 +82,8 @@ def to_number(v: Value) -> float | ErrorValue:
         return 1.0 if v else 0.0
     if isinstance(v, float):
         return v
-    text = v.strip()
-    if _NUMERIC_TEXT.fullmatch(text) and math.isfinite(number := float(text)):
-        return number
-    return _VALUE
+    number = parse_number(v.strip())
+    return _VALUE if number is None else number
 
 
 def to_text(v: Value) -> str | ErrorValue:

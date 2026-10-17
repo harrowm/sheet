@@ -22,10 +22,13 @@ import argparse
 import os
 import sys
 import time
-from collections.abc import Callable
 from functools import partial
+from typing import TYPE_CHECKING
 
 from sheet.engine.sheet import Sheet
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 MAX_SCALING = 4.0  # allowed slowdown when the number of range formulas grows 8x (it was 40x)
 RANGE_COUNTS = (1_000, 2_000, 4_000, 8_000)

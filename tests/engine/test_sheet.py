@@ -9,26 +9,7 @@ from sheet.engine.graph import CycleError, extract_references
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.sheet import Sheet
 from sheet.engine.values import ErrorKind, ErrorValue
-
-
-def c(name: str) -> tuple[int, int]:
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
-
-
-def put(s: Sheet, name: str, text: str):
-    return s.set_entry(*c(name), text)
-
-
-def val(s: Sheet, name: str):
-    return s.get(*c(name))
-
-
-def state(s: Sheet):
-    """Everything observable about the sheet, for before/after comparisons."""
-    cells = {pos: (cell.text, cell.value, cell.format) for pos, cell in s.store.items()}
-    graph = {pos: s.graph.dependencies(pos) for pos, _ in s.store.items()}
-    return cells, graph
-
+from tests.engine.helpers import c, full_state, put, val
 
 # --- basic entry and recalculation ----------------------------------------------
 
@@ -149,10 +130,10 @@ def test_clearing_a_formatted_cell_keeps_the_format():
 def test_syntax_error_is_rejected_without_changes_or_history():
     s = Sheet()
     put(s, "A1", "1")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(FormulaSyntaxError):
         put(s, "A1", "=1+")
-    assert state(s) == before
+    assert full_state(s) == before
     s.undo()
     assert val(s, "A1") is None  # the only history entry was the valid edit
 
@@ -160,10 +141,10 @@ def test_syntax_error_is_rejected_without_changes_or_history():
 def test_self_reference_is_rejected():
     s = Sheet()
     put(s, "A1", "5")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(CycleError):
         put(s, "A1", "=A1+1")
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 def test_cycle_is_rejected_and_everything_is_restored():
@@ -171,10 +152,10 @@ def test_cycle_is_rejected_and_everything_is_restored():
     put(s, "A1", "1")
     put(s, "B1", "=A1+1")
     put(s, "C1", "=B1+1")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(CycleError):
         put(s, "A1", "=C1")
-    assert state(s) == before
+    assert full_state(s) == before
     put(s, "A1", "10")  # the engine still works afterwards
     assert val(s, "C1") == 12.0
 
@@ -198,7 +179,7 @@ def test_failure_during_recalculation_rolls_everything_back(monkeypatch):
     s = Sheet()
     put(s, "A1", "1")
     put(s, "B1", "=A1+1")
-    before = state(s)
+    before = full_state(s)
     real = sheet_module.evaluate
     calls = []
 
@@ -212,7 +193,7 @@ def test_failure_during_recalculation_rolls_everything_back(monkeypatch):
     with pytest.raises(RuntimeError):
         put(s, "A1", "=3*2")  # recalculates A1 then B1; the second evaluation fails
     monkeypatch.setattr(sheet_module, "evaluate", real)
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 # --- batches -------------------------------------------------------------------------
@@ -229,10 +210,10 @@ def test_batch_is_order_independent_and_one_undo_step():
 def test_batch_with_a_cycle_applies_nothing():
     s = Sheet()
     put(s, "Z1", "1")
-    before = state(s)
+    before = full_state(s)
     with pytest.raises(CycleError):
         s.set_entries([(*c("A1"), "=B1"), (*c("B1"), "=A1"), (*c("C1"), "3")])
-    assert state(s) == before
+    assert full_state(s) == before
 
 
 def test_batch_last_write_wins_for_duplicate_positions():
@@ -329,13 +310,13 @@ def test_undo_redo_cycle_many_times_is_stable():
     put(s, "A1", "1")
     put(s, "B1", "=A1+1")
     put(s, "A1", "5")
-    final = state(s)
+    final = full_state(s)
     for _ in range(3):
         s.undo()
         s.undo()
         s.redo()
         s.redo()
-    assert state(s) == final
+    assert full_state(s) == final
 
 
 # --- randomised consistency ----------------------------------------------------------
@@ -386,11 +367,11 @@ def test_random_operations_keep_graph_and_values_consistent(ops):
     s = Sheet()
     for op in ops:
         if op[0] == "set":
-            before = state(s)
+            before = full_state(s)
             try:
                 s.set_entry(*op[1], op[2])
             except CycleError:
-                assert state(s) == before
+                assert full_state(s) == before
         elif op[0] == "undo":
             s.undo()
         else:

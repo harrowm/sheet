@@ -9,17 +9,10 @@ from sheet.engine.formats import format_value
 from sheet.engine.lexer import FormulaSyntaxError, tokenize
 from sheet.engine.sheet import Sheet
 from sheet.engine.values import ErrorKind, ErrorValue
+from tests.engine.helpers import calc
 
 NUM = ErrorValue(ErrorKind.NUM)
 VALUE = ErrorValue(ErrorKind.VALUE)
-
-
-def calc(formula, **cells):
-    s = Sheet(workers=1)
-    for name, text in cells.items():
-        s.set_entry(int(name[1:]) - 1, ord(name[0]) - 65, text)
-    s.set_entry(30, 0, formula)
-    return s.get(30, 0)
 
 
 # --- numbers too large to store ----------------------------------------------------------------

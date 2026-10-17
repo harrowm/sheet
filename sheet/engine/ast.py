@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from sheet.engine.values import ErrorValue
+if TYPE_CHECKING:
+    from sheet.engine.values import ErrorValue
 
 
 @dataclass(frozen=True, slots=True)

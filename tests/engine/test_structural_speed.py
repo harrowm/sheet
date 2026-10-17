@@ -11,6 +11,7 @@ from sheet.engine.parser import parse
 from sheet.engine.refs import Axis, delete_refs, insert_refs, render
 from sheet.engine.sheet import Sheet, _rewritten
 from sheet.engine.values import ErrorKind, ErrorValue
+from tests.engine.helpers import cell_state
 
 
 def put(s: Sheet, r: int, c: int, text: str):
@@ -228,10 +229,6 @@ def big_sheet(workers: int, n=600) -> Sheet:
     return s
 
 
-def state(s: Sheet):
-    return {pos: (c.text, c.value, c.format) for pos, c in s.store.items()}
-
-
 def test_the_rewrite_uses_several_threads_when_the_sheet_is_big_enough(
     parallel_rewrite, monkeypatch
 ):
@@ -284,23 +281,23 @@ def test_threaded_and_sequential_rewrites_give_identical_sheets_undo_and_redo(pa
     seq, par = big_sheet(workers=1), big_sheet(workers=4)
     op(seq)
     op(par)
-    assert state(seq) == state(par)
+    assert cell_state(seq) == cell_state(par)
     seq.undo()
     par.undo()
-    assert state(seq) == state(par)
+    assert cell_state(seq) == cell_state(par)
     seq.redo()
     par.redo()
-    assert state(seq) == state(par)
+    assert cell_state(seq) == cell_state(par)
     par.close()
 
 
 def test_a_failure_in_a_worker_changes_nothing(parallel_rewrite):
     s = big_sheet(workers=4)
     s.set_entry(1_048_575, 5, "last row")  # inserting would push it off the grid
-    before = state(s)
+    before = cell_state(s)
     with pytest.raises(ValueError, match="edge of the grid"):
         s.insert_rows(0)
-    assert state(s) == before
+    assert cell_state(s) == before
     s.close()
 
 
@@ -323,7 +320,7 @@ def test_random_structural_sequences_agree_between_threaded_and_sequential(ops):
         for name, at, count in ops:
             for s in (seq, par):
                 getattr(s, name)(at, count)
-            assert state(seq) == state(par)
+            assert cell_state(seq) == cell_state(par)
         par.close()
     finally:
         sheet_module.PARALLEL_REWRITE_MIN, sheet_module.PARALLEL_REWRITE_CHUNK = saved

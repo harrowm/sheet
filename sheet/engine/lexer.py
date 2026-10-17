@@ -7,7 +7,7 @@ import re
 from enum import Enum, auto
 from typing import NamedTuple
 
-from sheet.engine.values import ErrorKind
+from sheet.engine.values import NUMBER_PATTERN, ErrorKind
 
 
 class FormulaSyntaxError(ValueError):
@@ -51,7 +51,7 @@ _TOKEN = re.compile(
             "(?P<error>" + "|".join(re.escape(e) for e in _ERRORS) + ")",
             r"(?P<badhash>\#)",
             r"(?P<punct>[(),:])",
-            r"(?P<number>(?a:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))",  # ASCII digits only
+            f"(?P<number>(?a:{NUMBER_PATTERN}))",  # ASCII digits only
             r"(?P<ref>(?a:\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])))",
             r"(?P<name>[A-Za-z_][A-Za-z0-9_.]*)",
             r"(?P<op><>|<=|>=|[-+*/^%&=<>])",

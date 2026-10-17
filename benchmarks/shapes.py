@@ -13,8 +13,12 @@ the single seed cell then recalculates the whole shape.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sheet.engine.address import cell_name as a1
-from sheet.engine.sheet import Sheet
+
+if TYPE_CHECKING:
+    from sheet.engine.sheet import Sheet
 
 DATA_COL = 100
 SEED_COL = 101

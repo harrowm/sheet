@@ -110,16 +110,33 @@ def _rewritten(
     return Cell(text, ast, cell.value, cell.format), False
 
 
+def _moved_index(i: int, at: int, count: int, insert: bool, limit: int) -> int | None:
+    """Where row/column ``i`` ends up after ``count`` are inserted at, or deleted from, ``at``.
+
+    ``None`` means it was deleted. An insert that would push ``i`` past ``limit`` raises.
+    """
+    if insert:
+        moved = i + count if i >= at else i
+        if moved >= limit:
+            raise ValueError("Insert would push cells off the edge of the grid")
+        return moved
+    if at <= i < at + count:
+        return None
+    return i - count if i >= at + count else i
+
+
 def _reaches_at_most(cell: Cell, axis: Axis, at: int, compute: bool = True) -> bool:
     """Whether no reference in the cell's formula lies at index ``at`` or beyond on ``axis``,
     so inserting or deleting there cannot change it. The answer is cached on the cell; with
     ``compute`` false a cell whose answer is not cached yet counts as "no"."""
+    ast = cell.ast
+    if ast is None:
+        return True  # a constant refers to nothing
     packed = cell.reach_cache
     if packed < 0:
         if not compute:
             return False
-        assert cell.ast is not None
-        packed = cell.reach_cache = reach(cell.ast)  # racy writes store the same value
+        packed = cell.reach_cache = reach(ast)  # racy writes store the same value
     if axis is Axis.ROW:
         return packed >> REACH_SHIFT <= at
     return packed & ((1 << REACH_SHIFT) - 1) <= at
@@ -308,7 +325,6 @@ class Sheet:
             raise ValueError("count must be at least 1")
         if not 0 <= at < axis.limit:
             raise IndexError(f"{at} is outside the grid")
-        band_end = at + count
 
         def rewrite(node: Node, fx: Effects) -> Node:
             if insert:
@@ -327,12 +343,7 @@ class Sheet:
             redo_at: list[Pos] = []
             for pos, cell in part:
                 i = pos[axis.value]
-                if insert:
-                    new_i: int | None = i + count if i >= at else i
-                    if new_i is not None and new_i >= axis.limit:
-                        raise ValueError("Insert would push cells off the edge of the grid")
-                else:
-                    new_i = None if at <= i < band_end else i - count if i >= band_end else i
+                new_i = _moved_index(i, at, count, insert, axis.limit)
                 if new_i is None:
                     gone.append(pos)
                     continue
@@ -434,7 +445,7 @@ class Sheet:
             raise ValueError("Paste would extend beyond the edge of the grid")
         d_row, d_col = row - clip.origin[0], col - clip.origin[1]
 
-        def shifted(node: Node, fx: Effects) -> Node:
+        def shifted(node: Node, _fx: Effects) -> Node:
             return shift_refs(node, d_row, d_col)
 
         changes: dict[Pos, Cell | None] = {}

@@ -8,9 +8,9 @@ target becomes the ``#REF!`` error literal.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sheet.engine.address import column_name
 from sheet.engine.ast import (
@@ -25,6 +25,9 @@ from sheet.engine.ast import (
 )
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.values import ErrorKind, ErrorValue
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _REF_ERROR = Literal(ErrorValue(ErrorKind.REF))
 

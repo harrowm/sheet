@@ -21,11 +21,14 @@ import argparse
 import os
 import sys
 import time
-from collections.abc import Callable
 from functools import partial
+from typing import TYPE_CHECKING
 
 from benchmarks.shapes import SEED_COL, SHAPES, edit_seed, snapshot
 from sheet.engine.sheet import Sheet
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 CHECK_WORKERS = min(os.cpu_count() or 1, 4)
 # Speedup must reach this fraction of CHECK_WORKERS. fan_out has every cell reading one shared

@@ -135,7 +135,8 @@ class _Parser:
         match tok.kind:
             case TokenKind.NUMBER | TokenKind.STRING | TokenKind.BOOL:
                 self._next()
-                assert tok.value is not None
+                if tok.value is None:
+                    raise AssertionError("a literal token without a value")
                 return Literal(tok.value)
             case TokenKind.ERROR:
                 self._next()

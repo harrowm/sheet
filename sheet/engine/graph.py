@@ -18,11 +18,13 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections import deque
-from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from sheet.engine.ast import BinaryOp, CellRef, FuncCall, Node, RangeRef, UnaryOp
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 Cell = tuple[int, int]  # (row, col), 0-based
 WIDE_RANGE_COLUMNS = 64  # ranges wider than this are not bucketed per column
@@ -95,9 +97,9 @@ class _RowIntervals:
         found: list[Rect] = []
         for k, (starts, rects) in self._classes.items():
             lo = bisect_left(starts, row - (1 << k) + 1)
-            for i in range(lo, bisect_right(starts, row)):
-                if rects[i].r2 >= row:
-                    found.append(rects[i])
+            found.extend(
+                rects[i] for i in range(lo, bisect_right(starts, row)) if rects[i].r2 >= row
+            )
         return found
 
 

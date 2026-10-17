@@ -12,8 +12,7 @@ Cell positions are 0-based ``[row, col]``; rectangles are ``[r1, c1, r2, c2]`` (
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sheet.engine.csv_io import CsvError, export_csv, import_csv
 from sheet.engine.files import FileFormatError, load_sheet, save_sheet
@@ -24,6 +23,9 @@ from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.sheet import Clipboard, Pos, Sheet
 from sheet.engine.values import ErrorValue
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 MAX_VIEW_CELLS = 20_000  # largest viewport a client may request
 CHANGED_LIMIT = 5_000  # above this a response gives only the bounds of what changed
@@ -138,14 +140,14 @@ class Session:
             "paste": self._paste,
             "paste_text": self._paste_text,
             "fill": self._fill,
-            "undo": lambda r: self._changed(self.sheet.undo()),
-            "redo": lambda r: self._changed(self.sheet.redo()),
+            "undo": lambda _r: self._changed(self.sheet.undo()),
+            "redo": lambda _r: self._changed(self.sheet.redo()),
             "save": self._save,
             "load": self._load,
             "new": self._new,
             "import_csv": self._import_csv,
             "export_csv": self._export_csv,
-            "shutdown": lambda r: {},
+            "shutdown": lambda _r: {},
         }
 
     def close(self) -> None:
@@ -195,7 +197,7 @@ class Session:
         except (IndexError, ValueError) as exc:
             response = {"ok": False, "error": {"kind": "invalid", "message": str(exc)}}
         except Exception as exc:  # noqa: BLE001 - an engine bug must not kill the server
-            print(f"internal error handling {request!r}: {exc!r}", file=sys.stderr)
+            sys.stderr.write(f"internal error handling {request!r}: {exc!r}\n")
             response = {"ok": False, "error": {"kind": "internal", "message": repr(exc)}}
         if req_id is not None:
             response["id"] = req_id
@@ -215,7 +217,7 @@ class Session:
 
     # --- reading -----------------------------------------------------------------------
 
-    def _hello(self, request: Request) -> Response:
+    def _hello(self, _request: Request) -> Response:
         gil = getattr(sys, "_is_gil_enabled", lambda: True)()
         return {"max_rows": MAX_ROWS, "max_cols": MAX_COLS, "gil": bool(gil)}
 
@@ -264,7 +266,7 @@ class Session:
             "formula": cell.ast is not None,
         }
 
-    def _used_range(self, request: Request) -> Response:
+    def _used_range(self, _request: Request) -> Response:
         used = self.sheet.store.used_range()
         return {"range": None if used is None else [0, 0, used[2], used[3]]}
 
@@ -366,7 +368,7 @@ class Session:
         self._replace_sheet(new)
         return {"cells": len(new.store), "path": path, "reset": True}
 
-    def _new(self, request: Request) -> Response:
+    def _new(self, _request: Request) -> Response:
         self._replace_sheet(Sheet(**self._sheet_options))
         return {"reset": True}
 

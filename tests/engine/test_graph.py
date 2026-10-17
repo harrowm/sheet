@@ -8,11 +8,6 @@ from sheet.engine.compiler import compile_formula
 from sheet.engine.graph import CycleError, DependencyGraph, Rect, extract_references
 
 
-def c(name: str) -> tuple[int, int]:
-    """A1-style name -> (row, col)."""
-    return int(name[1:]) - 1, ord(name[0]) - ord("A")
-
-
 def set_deps(g: DependencyGraph, cell, cells, ranges=()):
     """Install a cell's dependencies, check for a cycle, and restore the old ones on failure.
 
@@ -314,6 +309,7 @@ def test_restore_dependencies_installs_edges_without_a_cycle_check():
 # --- the range index: which ranges contain a given cell? ----------------------------------------------------
 
 from sheet.engine.graph import _RowIntervals
+from tests.engine.helpers import c
 
 
 def brute(rects, row):

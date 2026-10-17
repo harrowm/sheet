@@ -17,18 +17,21 @@ files that only add information.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from sheet.engine.address import cell_name
-from sheet.engine.entry import Entry
 from sheet.engine.formats import GENERAL, FormatError, validate_format
 from sheet.engine.lexer import FormulaSyntaxError
 from sheet.engine.parser import MAX_COLS, MAX_ROWS
 from sheet.engine.sheet import Sheet
+
+if TYPE_CHECKING:
+    from sheet.engine.entry import Entry
 
 FILE_VERSION = 1
 FORMAT_NAME = "sheet"
@@ -60,7 +63,7 @@ def save_sheet(sheet: Sheet, path: str | os.PathLike[str]) -> int:
 
     target = Path(os.path.realpath(path))  # save through a symlink into the file it points to
     try:
-        mode: int | None = os.stat(target).st_mode & 0o7777  # keep an existing file's permissions
+        mode: int | None = target.stat().st_mode & 0o7777  # keep an existing file's permissions
     except FileNotFoundError:
         mode = None
     # Created with 0o666 so the process umask decides a new file's mode (mkstemp would force 0o600).
@@ -78,12 +81,10 @@ def save_sheet(sheet: Sheet, path: str | os.PathLike[str]) -> int:
             if mode is not None and hasattr(os, "fchmod"):
                 os.fchmod(f.fileno(), mode)
             os.fsync(f.fileno())
-        os.replace(tmp_name, target)
+        Path(tmp_name).replace(target)
     except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            Path(tmp_name).unlink()
         raise
     return len(rows)
 
@@ -94,7 +95,7 @@ def _is_int(value: object) -> TypeGuard[int]:
 
 def _read(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
-        with open(path, encoding="utf-8") as f:
+        with Path(path).open(encoding="utf-8") as f:
             data = json.load(f)
     except RecursionError as exc:
         raise FileFormatError("not a sheet file (nested too deeply)") from exc

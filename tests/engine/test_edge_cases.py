@@ -19,15 +19,7 @@ from sheet.engine.refs import render
 from sheet.engine.sheet import Sheet
 from sheet.server.main import serve
 from sheet.server.protocol import Session
-
-
-def calc(formula, **cells):
-    s = Sheet(workers=1)
-    for name, text in cells.items():
-        s.set_entry(int(name[1:]) - 1, ord(name[0]) - 65, text)
-    s.set_entry(30, 0, formula)
-    return s.get(30, 0)
-
+from tests.engine.helpers import calc
 
 # --- dates ---------------------------------------------------------------------------------------------
 
