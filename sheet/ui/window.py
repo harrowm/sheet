@@ -34,6 +34,7 @@ from sheet.ui.names import cell_name, parse_cell_name
 
 BUSY_DELAY_MS = 150  # show "Calculating..." only if the engine takes longer than this
 MESSAGE_MS = 8000
+SAVE_WAIT_CEILING_MS = 60_000  # a save that has not been answered after this long is abandoned
 
 FORMATS = [
     ("General", "General"),
@@ -303,8 +304,7 @@ class MainWindow(QMainWindow):
         self.name_box.setEnabled(False)
         for action in self.actions_by_name.values():
             action.setEnabled(False)
-        if self.interactive:
-            QMessageBox.critical(self, "Sheet", f"The calculation engine stopped.\n\n{message}")
+        self._show_critical(f"The calculation engine stopped.\n\n{message}")
 
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -334,8 +334,8 @@ class MainWindow(QMainWindow):
             "engine": f"Engine error: {message}",
         }.get(kind, message)
         self.show_message(text, error=True)
-        if self.interactive and kind in ("csv", "io", "file"):
-            QMessageBox.warning(self, "Sheet", message)
+        if kind in ("csv", "io", "file"):
+            self._show_warning(message)
 
     # --- cursor, name box and formula bar ----------------------------------------------
 
@@ -464,11 +464,7 @@ class MainWindow(QMainWindow):
         self.model.send("format", rect=list(self.selection_rect()), fmt=fmt)
 
     def custom_format(self) -> None:
-        if not self.interactive:
-            return
-        text, ok = QInputDialog.getText(
-            self, "Custom format", "Format (for example #,##0.00 or DD/MM/YYYY):"
-        )
+        text, ok = self._ask_text("Custom format", "Format (for example #,##0.00 or DD/MM/YYYY):")
         if ok and text:
             self.apply_format(text)
 
@@ -478,6 +474,44 @@ class MainWindow(QMainWindow):
             self.model.send(op, at=r1, count=r2 - r1 + 1)
         else:
             self.model.send(op, at=c1, count=c2 - c1 + 1)
+
+    # --- prompts -----------------------------------------------------------------------
+    # Every modal dialog lives in one of these small methods so tests can script the answers.
+    # A window created with interactive=False never opens a dialog: it behaves as if cancelled.
+
+    def _ask_unsaved(self) -> QMessageBox.StandardButton:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("This document has unsaved changes.")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        return QMessageBox.StandardButton(box.exec())
+
+    def _choose_open_path(self, title: str, file_filter: str) -> str:
+        if not self.interactive:
+            return ""
+        return QFileDialog.getOpenFileName(self, title, "", file_filter)[0]
+
+    def _choose_save_path(self, title: str, file_filter: str, start: str = "") -> str:
+        if not self.interactive:
+            return ""
+        return QFileDialog.getSaveFileName(self, title, start, file_filter)[0]
+
+    def _ask_text(self, title: str, label: str) -> tuple[str, bool]:
+        if not self.interactive:
+            return "", False
+        return QInputDialog.getText(self, title, label)
+
+    def _show_warning(self, text: str) -> None:
+        if self.interactive:
+            QMessageBox.warning(self, "Sheet", text)
+
+    def _show_critical(self, text: str) -> None:
+        if self.interactive:
+            QMessageBox.critical(self, "Sheet", text)
 
     # --- documents ---------------------------------------------------------------------
 
@@ -498,24 +532,21 @@ class MainWindow(QMainWindow):
         """Ask before throwing away unsaved changes. False means the user cancelled."""
         if not self.is_dirty() or not self.interactive:
             return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setText("This document has unsaved changes.")
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel
-        )
-        choice = box.exec()
+        choice = self._ask_unsaved()
         if choice == QMessageBox.StandardButton.Save:
             return self._save_and_wait()
         return choice == QMessageBox.StandardButton.Discard
 
     def _save_and_wait(self) -> bool:
-        """Save now, running a local event loop until the engine answers."""
+        """Save now, running a local event loop until the engine answers.
+
+        False if the user cancelled the file chooser, the save failed, or the engine died
+        (a failed request is answered with an error, so the loop always ends; the timer is
+        a last-resort ceiling).
+        """
         path = self.current_path
         if path is None:
-            chosen, _ = QFileDialog.getSaveFileName(self, "Save", "", FILE_FILTER)
+            chosen = self._choose_save_path("Save", FILE_FILTER)
             if not chosen:
                 return False
             path = with_extension(chosen)
@@ -525,6 +556,7 @@ class MainWindow(QMainWindow):
             result.append(self._saved(path, response))
             loop.quit()
 
+        QTimer.singleShot(SAVE_WAIT_CEILING_MS, loop.quit)
         self.client.request("save", done, path=path)
         loop.exec()
         return bool(result and result[0])
@@ -535,7 +567,7 @@ class MainWindow(QMainWindow):
         self.model.send("new", on_done=lambda response: self._document_replaced(None, response))
 
     def open_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open", "", FILE_FILTER)
+        path = self._choose_open_path("Open", FILE_FILTER)
         if path:
             self.open_file(path)
 
@@ -558,9 +590,7 @@ class MainWindow(QMainWindow):
         return True
 
     def save_as_dialog(self) -> None:
-        if not self.interactive:
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Save As", self.current_path or "", FILE_FILTER)
+        path = self._choose_save_path("Save As", FILE_FILTER, self.current_path or "")
         if path:
             self.save_file(with_extension(path))
 
@@ -585,14 +615,12 @@ class MainWindow(QMainWindow):
     # --- csv ---------------------------------------------------------------------------
 
     def import_csv_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import CSV", "", "CSV files (*.csv);;All files (*)"
-        )
+        path = self._choose_open_path("Import CSV", "CSV files (*.csv);;All files (*)")
         if path:
             self.open_csv(path)
 
     def export_csv_dialog(self, mode: str) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "", "CSV files (*.csv)")
+        path = self._choose_save_path("Export CSV", "CSV files (*.csv)")
         if path:
             self.save_csv(path, mode)
 
