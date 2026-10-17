@@ -118,6 +118,39 @@ def map_refs(
     return node  # Literal
 
 
+REACH_SHIFT = 15  # columns fit in 15 bits (MAX_COLS is 16,384)
+
+
+def reach(node: Node) -> int:
+    """How far down and right a formula's references reach, packed into one integer.
+
+    The packed value is ``(highest row + 1) << REACH_SHIFT | (highest column + 1)``, and 0 for
+    a formula with no references. A structural edit at index ``at`` leaves the formula
+    unchanged if its row part (or column part) is at most ``at``.
+    """
+    rows = cols = 0
+
+    def visit(n: Node) -> None:
+        nonlocal rows, cols
+        match n:
+            case CellRef():
+                rows, cols = max(rows, n.row + 1), max(cols, n.col + 1)
+            case RangeRef():
+                rows = max(rows, n.start.row + 1, n.end.row + 1)
+                cols = max(cols, n.start.col + 1, n.end.col + 1)
+            case UnaryOp(_, operand):
+                visit(operand)
+            case BinaryOp(_, left, right):
+                visit(left)
+                visit(right)
+            case FuncCall(_, args):
+                for a in args:
+                    visit(a)
+
+    visit(node)
+    return rows << REACH_SHIFT | cols
+
+
 def _in_grid(row: int, col: int) -> bool:
     return 0 <= row < MAX_ROWS and 0 <= col < MAX_COLS
 

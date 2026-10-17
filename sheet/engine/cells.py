@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from array import array
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from sheet.engine.ast import Node
 from sheet.engine.entry import Entry
@@ -27,6 +27,9 @@ class Cell:
     ast: Node | None
     value: Value
     format: str = GENERAL
+    # How far the formula reaches, packed by ``refs.reach``; -1 until first needed. Not an
+    # init argument, so ``replace`` and every constructor start it afresh for the new AST.
+    reach_cache: int = field(default=-1, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.format = sys.intern(self.format)

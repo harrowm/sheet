@@ -23,7 +23,16 @@ from sheet.engine.graph import DependencyGraph, RecalcPlan, Rect, extract_refere
 from sheet.engine.limits import MAX_WRITE_CELLS
 from sheet.engine.parser import MAX_COLS, MAX_ROWS, parse
 from sheet.engine.recalc import DEFAULT_THRESHOLD, ParallelRecalculator
-from sheet.engine.refs import Axis, Effects, delete_refs, insert_refs, render, shift_refs
+from sheet.engine.refs import (
+    REACH_SHIFT,
+    Axis,
+    Effects,
+    delete_refs,
+    insert_refs,
+    reach,
+    render,
+    shift_refs,
+)
 from sheet.engine.values import ErrorValue, Value
 
 Pos = tuple[int, int]
@@ -96,6 +105,21 @@ def _rewritten(
         # reads this cell must be recalculated: it seeds the recalculation either way.
         return Cell(text, ast, value, cell.format), True
     return Cell(text, ast, cell.value, cell.format), False
+
+
+def _reaches_at_most(cell: Cell, axis: Axis, at: int, compute: bool = True) -> bool:
+    """Whether no reference in the cell's formula lies at index ``at`` or beyond on ``axis``,
+    so inserting or deleting there cannot change it. The answer is cached on the cell; with
+    ``compute`` false a cell whose answer is not cached yet counts as "no"."""
+    packed = cell.reach_cache
+    if packed < 0:
+        if not compute:
+            return False
+        assert cell.ast is not None
+        packed = cell.reach_cache = reach(cell.ast)  # racy writes store the same value
+    if axis is Axis.ROW:
+        return packed >> REACH_SHIFT <= at
+    return packed & ((1 << REACH_SHIFT) - 1) <= at
 
 
 def _check_write_size(cells: int) -> None:
@@ -280,7 +304,10 @@ class Sheet:
                     gone.append(pos)
                     continue
                 new_pos = (new_i, pos[1]) if axis is Axis.ROW else (pos[0], new_i)
-                new_cell, redo = _rewritten(cell, rewrite, carry_value=True)
+                if cell.ast is None or _reaches_at_most(cell, axis, at, compute=False):
+                    new_cell, redo = cell, False  # no reference is at or past the edit
+                else:
+                    new_cell, redo = _rewritten(cell, rewrite, carry_value=True)
                 if new_pos != pos or new_cell is not cell:
                     if new_pos != pos:
                         gone.append(pos)
@@ -293,11 +320,26 @@ class Sheet:
 
         # Each cell is rewritten independently of the others and nothing is stored until the
         # commit, so big sheets are split into chunks and rewritten on several threads.
+        # A cell before the edit whose formula (if any) reaches no further than the edit stays
+        # as it is. Finding them first, on one thread, keeps the pool for cells with work to do:
+        # threads sharing thousands of untouched cells only slow each other down.
+        axis_index = axis.value
+        items = self.store.items()
+        todo = (
+            items
+            if at == 0
+            else [
+                item
+                for item in items
+                if item[0][axis_index] >= at
+                or (item[1].ast is not None and not _reaches_at_most(item[1], axis, at))
+            ]
+        )
         final: dict[Pos, Cell] = {}
         vacated: set[Pos] = set()
         refs: dict[Pos, _Refs] = {}
         for placed, gone, redo_at, found in self._recalc.map(
-            process, self.store.items(), PARALLEL_REWRITE_MIN, PARALLEL_REWRITE_CHUNK
+            process, todo, PARALLEL_REWRITE_MIN, PARALLEL_REWRITE_CHUNK
         ):
             final.update(placed)
             vacated.update(gone)
