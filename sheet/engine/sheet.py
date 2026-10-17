@@ -9,7 +9,7 @@ and redo are all the same operation: put these cells back.
 from __future__ import annotations
 
 from collections import Counter, deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Self
 
@@ -28,6 +28,8 @@ from sheet.engine.values import ErrorValue, Value
 
 Pos = tuple[int, int]
 DEFAULT_MAX_HISTORY = 100
+PARALLEL_REWRITE_MIN = 20_000  # structural edits rewrite on the thread pool above this many cells
+PARALLEL_REWRITE_CHUNK = 5_000  # cells per task when they do
 DEFAULT_MAX_HISTORY_CELLS = 1_000_000  # total changed cells the undo/redo history may hold
 SNAPSHOT_MIN_READERS = 4  # a range read by fewer formulas is not worth packing
 
@@ -254,27 +256,45 @@ class Sheet:
             return delete_refs(node, axis, at, count, fx)
 
         seeds: list[Pos] = []  # moved formulas whose value may now differ
+
+        def process(
+            part: Sequence[tuple[Pos, Cell]],
+        ) -> tuple[list[tuple[Pos, Cell]], list[Pos], list[Pos]]:
+            """Rewrite one chunk of cells: (cells to place, positions vacated, formulas to redo)."""
+            placed: list[tuple[Pos, Cell]] = []
+            gone: list[Pos] = []
+            redo_at: list[Pos] = []
+            for pos, cell in part:
+                i = pos[axis.value]
+                if insert:
+                    new_i: int | None = i + count if i >= at else i
+                    if new_i is not None and new_i >= axis.limit:
+                        raise ValueError("Insert would push cells off the edge of the grid")
+                else:
+                    new_i = None if at <= i < band_end else i - count if i >= band_end else i
+                if new_i is None:
+                    gone.append(pos)
+                    continue
+                new_pos = (new_i, pos[1]) if axis is Axis.ROW else (pos[0], new_i)
+                new_cell, redo = _rewritten(cell, rewrite, carry_value=True)
+                if new_pos != pos or new_cell is not cell:
+                    if new_pos != pos:
+                        gone.append(pos)
+                    placed.append((new_pos, new_cell))
+                if redo:
+                    redo_at.append(new_pos)
+            return placed, gone, redo_at
+
+        # Each cell is rewritten independently of the others and nothing is stored until the
+        # commit, so big sheets are split into chunks and rewritten on several threads.
         final: dict[Pos, Cell | None] = {}
         vacated: set[Pos] = set()
-        for pos, cell in self.store.items():
-            i = pos[axis.value]
-            if insert:
-                new_i: int | None = i + count if i >= at else i
-                if new_i is not None and new_i >= axis.limit:
-                    raise ValueError("Insert would push cells off the edge of the grid")
-            else:
-                new_i = None if at <= i < band_end else i - count if i >= band_end else i
-            if new_i is None:
-                vacated.add(pos)
-                continue
-            new_pos = (new_i, pos[1]) if axis is Axis.ROW else (pos[0], new_i)
-            new_cell, redo = _rewritten(cell, rewrite, carry_value=True)
-            if new_pos != pos or new_cell is not cell:
-                if new_pos != pos:
-                    vacated.add(pos)
-                final[new_pos] = new_cell
-            if redo:
-                seeds.append(new_pos)
+        for placed, gone, redo_at in self._recalc.map(
+            process, self.store.items(), PARALLEL_REWRITE_MIN, PARALLEL_REWRITE_CHUNK
+        ):
+            final.update(placed)
+            vacated.update(gone)
+            seeds.extend(redo_at)
         changes: dict[Pos, Cell | None] = {p: None for p in vacated if p not in final}
         changes.update(final)
         # Moving cells and shifting references changes no value, so only the formulas that

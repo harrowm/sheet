@@ -329,3 +329,59 @@ def test_random_operations_give_identical_results_sequential_and_parallel(ops):
             }
     finally:
         par.close()
+
+
+# --- ParallelRecalculator.map -------------------------------------------------------------------------------
+
+
+def test_map_applies_the_function_to_every_item_in_order_on_several_threads():
+    r = ParallelRecalculator(workers=4, threshold=1)
+    seen = set()
+
+    def work(chunk):
+        seen.add(threading.get_ident())
+        time.sleep(0.01)
+        return [x * 2 for x in chunk]
+
+    items = list(range(10_000))
+    out = r.map(work, items, min_items=100, chunk=500)
+    assert [x for part in out for x in part] == [x * 2 for x in items]
+    assert len(seen) > 1
+    r.close()
+
+
+def test_map_is_sequential_for_small_inputs_one_worker_or_a_closed_pool():
+    main = threading.get_ident()
+    ids = []
+
+    def work(chunk):
+        ids.append(threading.get_ident())
+        return list(chunk)
+
+    items = list(range(50))
+    assert ParallelRecalculator(workers=4).map(work, items, min_items=100) == [items]
+    assert ParallelRecalculator(workers=1).map(work, items * 100, min_items=10, chunk=50) == [
+        items * 100
+    ]
+    closed = ParallelRecalculator(workers=4)
+    closed.close()
+    closed.map(work, items * 100, min_items=10, chunk=50)
+    assert set(ids) == {main}
+
+
+def test_map_propagates_an_exception_from_any_chunk():
+    r = ParallelRecalculator(workers=4)
+
+    def work(chunk):
+        if 4200 in chunk:
+            raise KeyError("boom")
+        return chunk
+
+    with pytest.raises(KeyError):
+        r.map(work, list(range(10_000)), min_items=100, chunk=500)
+    assert r.map(lambda c: c, [1, 2, 3], min_items=100) == [[1, 2, 3]]  # still usable
+    r.close()
+
+
+def test_map_of_nothing_is_nothing():
+    assert ParallelRecalculator(workers=4).map(lambda c: c, [], min_items=1) == []

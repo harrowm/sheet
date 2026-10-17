@@ -16,16 +16,20 @@ from __future__ import annotations
 import os
 import threading
 from collections import deque
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, wait
+from typing import TypeVar
 
 from sheet.engine.graph import Cell, RecalcPlan
 
 DEFAULT_THRESHOLD = 256  # plans smaller than this run on the calling thread
 DEFAULT_GRAIN = 8  # nodes per hand-off to the pool; amortises task overhead
+DEFAULT_MAP_CHUNK = 5_000  # items per task for ``map``
 _STRIPES = 64
 
 Compute = Callable[[Cell], None]
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
 
 class AtomicCounter:
@@ -156,6 +160,35 @@ class ParallelRecalculator:
                     max_workers=self.workers, thread_name_prefix="recalc"
                 )
             return self._pool
+
+    def map(
+        self,
+        fn: Callable[[Sequence[_T]], _R],
+        items: Sequence[_T],
+        min_items: int,
+        chunk: int = DEFAULT_MAP_CHUNK,
+    ) -> list[_R]:
+        """Apply ``fn`` to contiguous chunks of ``items`` and return the results in order.
+
+        Chunks run on the pool, and the calling thread takes the first one itself. Fewer
+        than ``min_items`` items, a single worker or a closed recalculator run ``fn`` once,
+        on the calling thread, over everything. An exception from any chunk is re-raised here
+        after all chunks have finished, so nothing is still running when the caller reacts.
+        """
+        n = len(items)
+        if n == 0:
+            return []
+        pool = self._get_pool() if self.workers > 1 and n >= min_items else None
+        size = max(chunk, -(-n // (self.workers * 4)))  # at most about four chunks per worker
+        if pool is None or size >= n:
+            return [fn(items)]
+        parts = [items[i : i + size] for i in range(0, n, size)]
+        futures = [pool.submit(fn, part) for part in parts[1:]]
+        try:
+            results = [fn(parts[0])]
+        finally:
+            wait(futures)  # never leave chunks running behind an exception
+        return results + [f.result() for f in futures]
 
     def is_parallel(self, nodes: int) -> bool:
         """Whether a plan of ``nodes`` cells would run on the thread pool."""
