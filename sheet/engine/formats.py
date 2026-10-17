@@ -8,6 +8,7 @@ quotes is copied literally.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from functools import lru_cache
@@ -122,6 +123,8 @@ def is_date_format(fmt: str) -> bool:
 def format_value(value: Value, fmt: str) -> str:
     """Render a cell value for display using ``fmt``."""
     compiled = _compile(fmt)  # raises FormatError even for values that ignore the format
+    if isinstance(value, float) and not math.isfinite(value):
+        return "#NUM!"  # cannot happen through normal entry; must never break a view
     if isinstance(value, float) and compiled is not None:
         if isinstance(compiled, _Date):
             return _render_date(value, compiled)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -39,8 +40,8 @@ class Token:
     pos: int
 
 
-_NUMBER = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
-_REF = re.compile(r"\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])")
+_NUMBER = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)  # ASCII digits only
+_REF = re.compile(r"\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])", re.ASCII)
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 _OPS = ("<>", "<=", ">=", "+", "-", "*", "/", "^", "%", "&", "=", "<", ">")
 _ERRORS = tuple(k.value for k in ErrorKind)
@@ -66,7 +67,10 @@ def tokenize(text: str) -> list[Token]:
             tokens.append(Token(_SINGLE[ch], ch, i))
             i += 1
         elif (m := _NUMBER.match(text, i)) is not None:
-            tokens.append(Token(TokenKind.NUMBER, float(m.group()), i))
+            number = float(m.group())
+            if not math.isfinite(number):
+                raise FormulaSyntaxError(f"The number {m.group()[:20]!r} is too large", i)
+            tokens.append(Token(TokenKind.NUMBER, number, i))
             i = m.end()
         elif (m := _REF.match(text, i)) is not None:
             tokens.append(Token(TokenKind.REF, m.group(), i))

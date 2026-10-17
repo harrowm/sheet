@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import Protocol
 
@@ -45,6 +46,7 @@ class _NoCells:
 
 NO_CELLS: CellReader = _NoCells()
 
+_NUMERIC_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
 _VALUE = ErrorValue(ErrorKind.VALUE)
 _DIV0 = ErrorValue(ErrorKind.DIV0)
 _NUM = ErrorValue(ErrorKind.NUM)
@@ -80,10 +82,10 @@ def to_number(v: Value) -> float | ErrorValue:
         return 1.0 if v else 0.0
     if isinstance(v, float):
         return v
-    try:
-        return float(v.strip())
-    except ValueError:
-        return _VALUE
+    text = v.strip()
+    if _NUMERIC_TEXT.fullmatch(text) and math.isfinite(number := float(text)):
+        return number
+    return _VALUE
 
 
 def to_text(v: Value) -> str | ErrorValue:
@@ -244,7 +246,12 @@ def _aggregate(
 ) -> Callable[[tuple[Node, ...], CellReader], Value]:
     def run(args: tuple[Node, ...], reader: CellReader) -> Value:
         nums = _numbers(args, reader)
-        return nums if isinstance(nums, ErrorValue) else fn(nums)
+        if isinstance(nums, ErrorValue):
+            return nums
+        try:
+            return fn(nums)
+        except OverflowError, ValueError:  # math.fsum: the exact total does not fit a float
+            return _NUM
 
     return run
 

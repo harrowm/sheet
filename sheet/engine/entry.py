@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -10,7 +11,7 @@ from sheet.engine.compiler import compile_formula
 from sheet.engine.dates import parse_date_text
 from sheet.engine.values import Value
 
-_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+_NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,8 +36,8 @@ def parse_entry(text: str) -> Entry:
         return Entry(text, ast, value, None)
     if stripped.startswith("'"):
         return Entry(text, None, stripped[1:], None)
-    if _NUMBER.fullmatch(stripped):
-        return Entry(text, None, float(stripped), None)
+    if _NUMBER.fullmatch(stripped) and math.isfinite(number := float(stripped)):
+        return Entry(text, None, number, None)  # (a number beyond float range stays text)
     if stripped.upper() in ("TRUE", "FALSE"):
         return Entry(text, None, stripped.upper() == "TRUE", None)
     if (date := parse_date_text(stripped)) is not None:
