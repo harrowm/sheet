@@ -112,7 +112,7 @@ def test_the_rewriter_matches_the_reference_implementation(formula, axis, at, co
         if insert
         else (lambda n: delete_refs(n, axis, at, count))
     )
-    new, redo = _rewritten(cell, lambda node, fx: rewrite(node))
+    new, _ = _rewritten(cell, lambda node, fx: rewrite(node))
     ref = reference_rewrite(cell, rewrite)
     assert (new.text, new.ast) == (ref.text, ref.ast)
     assert new.format == ref.format
